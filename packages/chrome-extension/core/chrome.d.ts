@@ -21,6 +21,9 @@ declare namespace chrome {
       };
     }
 
+    /** 上一条 Chrome API 调用的错误；仅在回调/监听器内同步读取有效（读取即视为已消费）。 */
+    const lastError: { message: string } | undefined;
+
     /** 建立到扩展自身的长连接（content script / 扩展页面均在扩展来源内）。 */
     function connect(connectInfo?: { name?: string }): Port;
 

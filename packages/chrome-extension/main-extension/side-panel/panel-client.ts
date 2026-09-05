@@ -39,6 +39,27 @@ export const DEFAULT_SETTINGS: PanelSettings = {
 
 const SETTINGS_KEYS = ['llmApiKey', 'llmBaseUrl', 'llmModel', 'debugMode', 'consoleOutput'] as const;
 
+/**
+ * 读取并消费 chrome.runtime.lastError。
+ *
+ * Chrome 约定：connect 找不到接收端时会把错误写入 lastError，若 onDisconnect
+ * 监听器未读取它，控制台会打印 "Unchecked runtime.lastError: Could not
+ * establish connection. Receiving end does not exist." 告警。经 globalThis
+ * 取值以兼容测试环境（无 chrome 全局），属性访问本身即完成"消费"。
+ */
+function consumeRuntimeLastError(): string | undefined {
+  const chromeGlobal = (globalThis as {
+    chrome?: { runtime?: { lastError?: { message?: string } } };
+  }).chrome;
+  return chromeGlobal?.runtime?.lastError?.message;
+}
+
+/** 断线重连：首次退避间隔与上限（指数退避）。 */
+const RECONNECT_DELAY_INITIAL_MS = 1_000;
+const RECONNECT_DELAY_MAX_MS = 15_000;
+/** 重连探活 ping 的超时（远短于业务请求）。 */
+const RECONNECT_PING_TIMEOUT_MS = 5_000;
+
 /** 从 chrome.storage.local 读取设置，缺省项回退默认值。 */
 export async function loadSettings(storage: {
   get: typeof chrome.storage.local.get;
@@ -70,6 +91,12 @@ export async function saveSettings(
 /**
  * 建立页面工具客户端。
  *
+ * 在线判定：Port 建立 ≠ 在线，收到该 Port 上的首条响应才置在线（避免接收端
+ * 不存在时的在线/离线抖动）；断开或探活失败则置离线。
+ *
+ * 断线恢复策略：Port 断开后按指数退避（1s 起、15s 封顶）主动重连，重连以
+ * listTools ping 成功为准；期间既有请求按原语义失败（拒绝并提示将重连）。
+ *
  * @param portFactory 创建 Port 的工厂（默认 chrome.runtime.connect，测试可注入桩）
  * @param requestTimeoutMs 单请求超时（毫秒），默认 30s（工具执行可能较慢）
  */
@@ -79,7 +106,11 @@ export function connectPageTools(
 ): PageToolsClient {
   let port: chrome.runtime.Port | undefined;
   let connected = false;
+  /** disconnect() 后置位，终止重连循环。 */
+  let disposed = false;
   let nextId = 1;
+  let reconnectDelayMs = RECONNECT_DELAY_INITIAL_MS;
+  let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   const pending = new Map<number, { resolve: (value: PageToolsResponse) => void; reject: (error: Error) => void }>();
   const statusListeners = new Set<(connected: boolean) => void>();
 
@@ -88,40 +119,83 @@ export function connectPageTools(
     for (const listener of statusListeners) listener(value);
   };
 
-  const ensurePort = (): chrome.runtime.Port => {
-    if (port && connected) return port;
-    if (port) {
-      // 清理旧端口的监听（断开时 Chrome 会自动触发 onDisconnect，防御性兜底）
-      port = undefined;
+  const clearReconnectTimer = (): void => {
+    if (reconnectTimer) {
+      clearTimeout(reconnectTimer);
+      reconnectTimer = null;
     }
+  };
+
+  const scheduleReconnect = (): void => {
+    if (disposed || connected || reconnectTimer) return;
+    reconnectTimer = setTimeout(() => {
+      reconnectTimer = null;
+      if (disposed || connected) return;
+      void verifyConnection();
+    }, reconnectDelayMs);
+    reconnectDelayMs = Math.min(reconnectDelayMs * 2, RECONNECT_DELAY_MAX_MS);
+  };
+
+  /** 重连探活：ping 一次 listTools，成功即恢复在线并重置退避。 */
+  const verifyConnection = async (): Promise<void> => {
+    if (disposed || connected) return;
+    try {
+      await request({ type: 'listTools' }, RECONNECT_PING_TIMEOUT_MS);
+      // 成功路径无需处理：首条响应到达时 onMessage 已置在线并重置退避
+    } catch {
+      // 超时（Port 仍在）时主动断开以触发统一的 onDisconnect 清理；
+      // 已断开（接收端不存在）场景 onDisconnect 内部已排定下一次尝试（幂等）
+      port?.disconnect();
+      port = undefined;
+      if (connected) return; // 竞态兜底：响应恰好在超时后到达
+      notifyStatus(false);
+      scheduleReconnect();
+    }
+  };
+
+  const ensurePort = (): chrome.runtime.Port => {
+    if (port) return port;
     const fresh = portFactory();
     fresh.onMessage.addListener((message: unknown) => {
       const response = message as PageToolsResponse;
       const waiter = pending.get(response.id);
       if (!waiter) return;
       pending.delete(response.id);
+      // 收到首条响应才算真正在线：避免 Port 建立即乐观置位造成的在线/离线抖动
+      if (!connected) {
+        reconnectDelayMs = RECONNECT_DELAY_INITIAL_MS;
+        notifyStatus(true);
+      }
       waiter.resolve(response);
     });
     fresh.onDisconnect.addListener(() => {
-      const error = new Error('与页面工具桥接的连接已断开（页面可能正在跳转），将自动重连');
+      // 必须读取 lastError，否则 Chrome 打印 Unchecked runtime.lastError 告警
+      const chromeError = consumeRuntimeLastError();
+      port = undefined;
+      const error = new Error(
+        chromeError
+          ? `与页面工具桥接的连接已断开（${chromeError}），将自动重连`
+          : '与页面工具桥接的连接已断开（页面可能正在跳转），将自动重连'
+      );
       for (const [, waiter] of pending) waiter.reject(error);
       pending.clear();
       notifyStatus(false);
+      // 主动重连：content script 就绪晚于侧栏（或页面跳转后）也能自动恢复
+      scheduleReconnect();
     });
     port = fresh;
-    notifyStatus(true);
     return fresh;
   };
 
-  const request = (req: Omit<PageToolsRequest, 'id'>): Promise<PageToolsResponse> => {
+  const request = (req: Omit<PageToolsRequest, 'id'>, timeoutMs: number = requestTimeoutMs): Promise<PageToolsResponse> => {
     const fresh = ensurePort();
     const id = nextId;
     nextId += 1;
     return new Promise<PageToolsResponse>((resolve, reject) => {
       const timer = setTimeout(() => {
         pending.delete(id);
-        reject(new Error(`页面工具请求超时（${requestTimeoutMs}ms）`));
-      }, requestTimeoutMs);
+        reject(new Error(`页面工具请求超时（${timeoutMs}ms）`));
+      }, timeoutMs);
       pending.set(id, {
         resolve: (value) => {
           clearTimeout(timer);
@@ -153,6 +227,8 @@ export function connectPageTools(
       return () => statusListeners.delete(listener);
     },
     disconnect() {
+      disposed = true;
+      clearReconnectTimer();
       port?.disconnect();
       port = undefined;
       notifyStatus(false);
