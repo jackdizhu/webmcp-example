@@ -75,7 +75,7 @@ afterEach(() => {
 describe('startPageToolsBridge', () => {
   it('listTools 请求被代理到 MCP Client 并回传工具清单', async () => {
     const harness = createHarness();
-    const stop = startPageToolsBridge(fakeClient);
+    const bridge = startPageToolsBridge(fakeClient);
     harness.connect();
 
     harness.dispatch({ id: 1, type: 'listTools' });
@@ -87,12 +87,12 @@ describe('startPageToolsBridge', () => {
     expect(response.id).toBe(1);
     expect(response.ok).toBe(true);
     expect(response.result[0]?.name).toBe('get_status');
-    stop();
+    bridge.stop();
   });
 
   it('callTool 请求把 name 与 args 透传给 MCP Client', async () => {
     const harness = createHarness();
-    const stop = startPageToolsBridge(fakeClient);
+    const bridge = startPageToolsBridge(fakeClient);
     harness.connect();
 
     harness.dispatch({ id: 2, type: 'callTool', name: 'get_status', args: { verbose: true } });
@@ -104,28 +104,41 @@ describe('startPageToolsBridge', () => {
     const response = harness.posted[0] as { ok: boolean; result: unknown };
     expect(response.ok).toBe(true);
     expect(serializeToolResult(response.result)).toBe('pong');
-    stop();
+    bridge.stop();
   });
 
   it('非约定端口名与非法消息被忽略', () => {
     const harness = createHarness();
-    const stop = startPageToolsBridge(fakeClient);
+    const bridge = startPageToolsBridge(fakeClient);
     harness.connectAs('other-port');
 
     harness.dispatch({ id: 3, type: 'unknown' });
     harness.dispatch('garbage');
 
     expect(harness.posted).toHaveLength(0);
-    stop();
+    bridge.stop();
   });
 
   it('stop 后移除监听器并断开活跃端口', () => {
     const harness = createHarness();
-    const stop = startPageToolsBridge(fakeClient);
+    const bridge = startPageToolsBridge(fakeClient);
     harness.connect();
-    stop();
+    bridge.stop();
     // 再次派发不应产生任何响应
     harness.dispatch({ id: 4, type: 'listTools' });
     expect(harness.posted).toHaveLength(0);
+  });
+
+  it('notifyToolsChanged 向所有活跃端口广播通知，stop 后不再广播', () => {
+    const harness = createHarness();
+    const bridge = startPageToolsBridge(fakeClient);
+    harness.connect();
+
+    bridge.notifyToolsChanged();
+    expect(harness.posted).toEqual([{ type: 'toolsChanged' }]);
+
+    bridge.stop();
+    bridge.notifyToolsChanged();
+    expect(harness.posted).toHaveLength(1);
   });
 });

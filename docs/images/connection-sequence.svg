@@ -36,5 +36,5 @@
   <text x="70" y="379" text-anchor="middle" dominant-baseline="central" font-size="13" font-weight="500" fill="#FFFFFF" font-family="sans-serif">6</text>
   <rect x="110" y="350" width="510" height="56" rx="8" fill="#E6F1FB" stroke="#185FA5" stroke-width="0.5"/>
   <text x="130" y="372" font-size="13" font-weight="500" fill="#0C447C" font-family="sans-serif">侧栏接入并调用工具</text>
-  <text x="130" y="393" font-size="12" fill="#185FA5" font-family="sans-serif">chrome.runtime.connect → listTools/callTool 代理到页面，结果按 id 原路返回</text>
+  <text x="130" y="393" font-size="12" fill="#185FA5" font-family="sans-serif">chrome.tabs.connect(tabId) → listTools/callTool 代理到页面，结果按 id 原路返回</text>
 </svg>

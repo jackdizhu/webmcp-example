@@ -71,6 +71,11 @@ class StubPort {
     // 发起方主动断开不触发自身 onDisconnect（与 Chrome 一致）
   }
 
+  /** 模拟对端推送任意消息（如 toolsChanged 通知）。 */
+  emit(message: unknown): void {
+    for (const fn of this.messageListeners) fn(message);
+  }
+
   /** 模拟对端断开；lastErrorMessage 非空时模拟 Chrome 在监听器执行期间暴露 lastError。 */
   drop(lastErrorMessage?: string): void {
     setChromeLastError(lastErrorMessage);
@@ -189,5 +194,88 @@ describe('connectPageTools 断线自动重连', () => {
 
     await vi.advanceTimersByTimeAsync(60_000);
     expect(created).toBe(countAtDisconnect);
+  });
+
+  it('toolsChanged 通知触发 onToolsChange 订阅且不影响挂起请求', async () => {
+    const stub = new StubPort({
+      responder: (request) => ({ id: request.id, ok: true, result: [] }),
+    });
+    const client = connectPageTools(() => asPort(stub));
+
+    let fired = 0;
+    client.onToolsChange(() => {
+      fired += 1;
+    });
+
+    // 先建立在线连接（首条响应置在线）
+    await client.listTools();
+    expect(fired).toBe(0);
+
+    // 桥接推送通知：订阅者被触发；无 id 的通知不影响后续请求响应
+    stub.emit({ type: 'toolsChanged' });
+    expect(fired).toBe(1);
+    await expect(client.listTools()).resolves.toEqual([]);
+    client.disconnect();
+  });
+
+  it('默认工厂经 chrome.tabs.connect 连接活动标签页', async () => {
+    const stub = new StubPort({
+      responder: (request) => ({ id: request.id, ok: true, result: [] }),
+    });
+    const querySpy = vi.fn(async () => [{ id: 42 }]);
+    const connectSpy = vi.fn(() => stub);
+    (globalThis as unknown as { chrome?: unknown }).chrome = {
+      runtime: {},
+      tabs: { query: querySpy, connect: connectSpy },
+    };
+
+    const client = connectPageTools();
+    await expect(client.listTools()).resolves.toEqual([]);
+    expect(querySpy).toHaveBeenCalledWith({ active: true, currentWindow: true });
+    expect(connectSpy).toHaveBeenCalledWith(42, { name: 'webmcp-page-tools' });
+
+    client.disconnect();
+    delete (globalThis as unknown as { chrome?: unknown }).chrome;
+  });
+
+  it('活动标签页切换后断开旧连接并重连到新标签页', async () => {
+    const created: Array<{ tabId: number; stub: StubPort }> = [];
+    let nextTabId = 100;
+    let notifyActivated: ((info: { tabId: number }) => void) | null = null;
+    (globalThis as unknown as { chrome?: unknown }).chrome = {
+      runtime: {},
+      tabs: {
+        query: vi.fn(async () => [{ id: nextTabId }]),
+        connect: vi.fn((tabId: number) => {
+          const stub = new StubPort({
+            responder: (request) => ({ id: request.id, ok: true, result: [tabId] }),
+          });
+          created.push({ tabId, stub });
+          return stub;
+        }),
+        onActivated: {
+          addListener: (cb: (info: { tabId: number }) => void) => {
+            notifyActivated = cb;
+          },
+          removeListener: () => {},
+        },
+      },
+    };
+
+    const client = connectPageTools();
+    // 首次连接到标签页 100
+    await expect(client.listTools()).resolves.toEqual([100]);
+    expect(created[0]?.tabId).toBe(100);
+    expect(notifyActivated).not.toBeNull();
+
+    // 切换到标签页 101：旧端口被断开，重连循环自动连到新活动页
+    nextTabId = 101;
+    notifyActivated!({ tabId: 101 });
+    await vi.advanceTimersByTimeAsync(1_000);
+    await expect(client.listTools()).resolves.toEqual([101]);
+    expect(created[1]?.tabId).toBe(101);
+
+    client.disconnect();
+    delete (globalThis as unknown as { chrome?: unknown }).chrome;
   });
 });

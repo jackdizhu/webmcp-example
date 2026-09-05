@@ -45,14 +45,14 @@ Chrome 扩展的 content script 运行在与网页**互相隔离的 JavaScript �
 
 - **页面主世界**：`shell/main-world.ts` 在 `document_start` 以 MAIN world 注入 `@mcp-b/global`，安装 `document.modelContext`（优先原生 WebMCP，缺失时降级 polyfill）；`html-app` 业务代码在此调用 `modelContext.registerTool()` 注册工具，工具的 `execute` 闭包也在主世界执行（可直接访问页面 DOM 与业务状态），并扮演 MCP Server（监听 channel `mcp-default` 的 window message）。
 - **隔离世界**：`core/content-script.ts` 建立 MCP Client（`TabClientTransport` + JSON-RPC 会话），`core/page-tools-bridge.ts` 把已连接的 Client 通过 `chrome.runtime` 长连接暴露给扩展其他上下文。此世界可用特权 API，但看不到页面 JS。
-- **扩展页面**：侧边栏 `panel-client.ts` 发起 `chrome.runtime.connect({ name: 'webmcp-page-tools' })`，发送轻量 `listTools` / `callTool` 请求。
+- **扩展页面**：侧边栏 `panel-client.ts` 经 `chrome.tabs.connect(tabId, { name: 'webmcp-page-tools' })` 连接到**活动标签页**的桥接，发送轻量 `listTools` / `callTool` 请求，并在切换标签页时自动跟随重连。
 
-两条通道的分工：
+两条通道的分工（注意：扩展页面 → content script 必须用 `tabs.connect`，官方文档明确 `runtime.connect` 只在扩展进程上下文间投递，到不了 content script）：
 
 | 通道 | 连接的上下文 | 承载协议 |
 | ---- | ---- | ---- |
 | ① `window.postMessage`（channel `mcp-default`） | 隔离世界 ↔ 页面主世界 | 标准 MCP JSON-RPC（`tools/list`、`tools/call`） |
-| ② `chrome.runtime` Port（`webmcp-page-tools`） | 扩展页面 ↔ content script | 扩展内部轻量请求-响应协议（工具 schema 原样透传） |
+| ② `chrome.tabs.connect(tabId)`（port name `webmcp-page-tools`） | 扩展页面（侧栏） ↔ 活动标签页的 content script | 扩展内部轻量请求-响应协议（工具 schema 原样透传） |
 
 ### 连接建立时序
 
@@ -63,7 +63,7 @@ Chrome 扩展的 content script 运行在与网页**互相隔离的 JavaScript �
 3. content script 的 `TabClientTransport` 经 `window.postMessage` 发送 `mcp-check-ready` 探测；
 4. polyfill 应答 `mcp-server-ready`，完成 JSON-RPC `initialize` 握手（`TabClientTransport` 探测为一次性，故 `connectWithRetry` 以 10s 超时 × 5 次兜底）；
 5. 握手成功即注册 `startPageToolsBridge`，监听 `runtime.onConnect`（把侧栏可连接窗口最早化）；
-6. 侧栏 `chrome.runtime.connect` 接入，工具调用沿「侧栏 → Port → 桥接 → MCP Client → postMessage → polyfill → `execute`」原路返回。
+6. 侧栏 `chrome.tabs.connect(tabId)` 接入活动标签页，工具调用沿「侧栏 → Port → 桥接 → MCP Client → postMessage → polyfill → `execute`」原路返回。
 
 ### Mermaid 源图（供无法读取图片的大模型消费）
 
@@ -84,7 +84,7 @@ flowchart TB
             CLIENT["MCP Client<br/>TabClientTransport · JSON-RPC 会话"]
         end
     end
-    PANEL -- "通道② chrome.runtime Port（webmcp-page-tools）<br/>listTools / callTool" --> BRIDGE
+    PANEL -- "通道② chrome.tabs.connect(tabId)（webmcp-page-tools）<br/>listTools / callTool" --> BRIDGE
     BRIDGE -- "代理请求" --> CLIENT
     APP -- "registerTool" --> SERVER
     CLIENT <-- "通道① window.postMessage（mcp-default）<br/>MCP JSON-RPC 双向" --> SERVER
@@ -106,7 +106,7 @@ sequenceDiagram
     CS->>MW: JSON-RPC initialize（connectWithRetry 10s×5 兜底）
     MW-->>CS: 握手完成，MCP 会话建立
     CS->>CS: startPageToolsBridge 监听 runtime.onConnect
-    SP->>CS: chrome.runtime.connect（name: webmcp-page-tools）
+    SP->>CS: chrome.tabs.connect（tabId, name: webmcp-page-tools）
     SP->>CS: listTools / callTool 请求（携带自增 id）
     CS->>MW: 代理为 MCP tools/list / tools/call
     MW->>MW: 执行工具 execute（页面主世界内）

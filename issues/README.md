@@ -24,3 +24,5 @@
 | 文件 | 问题描述 | 状态 |
 |---|---|---|
 | `001-vue-runtime-template-csp-eval.md` | 侧边栏白屏：Vue 运行时模板编译触发 MV3 CSP EvalError | ✅ 已解决 |
+| `002-side-panel-messaging-channel-tabs-connect.md` | 侧边栏连不上页面工具桥接：`runtime.connect` 到不了 content script，须用 `tabs.connect(tabId)` | ✅ 已解决 |
+| `003-page-tools-changed-no-push.md` | 页面工具清单变化不推送侧栏（listChanged → toolsChanged 推送通道缺失 + 恢复在线不刷新） | ✅ 已解决 |

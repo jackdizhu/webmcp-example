@@ -34,6 +34,19 @@ export interface PageToolsResponse {
   error?: string;
 }
 
+/** content script → 侧边栏的单向通知（无 id，区别于请求响应）。 */
+export interface PageToolsNotification {
+  type: 'toolsChanged';
+}
+
+/** 桥接句柄：停止桥接，以及在页面工具清单变化时广播通知。 */
+export interface PageToolsBridgeHandle {
+  /** 停止桥接：移除监听器并断开所有活跃端口（content script 卸载时调用）。 */
+  stop(): void;
+  /** 向所有活跃端口广播 toolsChanged 通知（侧栏收到后刷新清单）。 */
+  notifyToolsChanged(): void;
+}
+
 /** 桥接透传的工具元数据（来自 MCP listTools，schema 原样保留）。 */
 export interface PageToolMeta {
   name: string;
@@ -69,10 +82,22 @@ export function serializeToolResult(result: unknown): string {
  * 启动页面工具桥接：监听扩展内长连接，把 listTools / callTool 代理到给定 MCP Client。
  *
  * @param client 已连接到当前页面的 MCP Client（core/content-script.ts 产出）
- * @returns 停止函数：移除监听器并断开所有活跃端口（content script 卸载时调用）
+ * @returns 桥接句柄：stop() 停止桥接；notifyToolsChanged() 在页面工具清单
+ *          变化（MCP listChanged）时向侧栏广播，弥补纯请求-响应协议无推送的缺口
  */
-export function startPageToolsBridge(client: Client): () => void {
+export function startPageToolsBridge(client: Client): PageToolsBridgeHandle {
   const ports = new Set<chrome.runtime.Port>();
+
+  const notifyToolsChanged = (): void => {
+    const notification: PageToolsNotification = { type: 'toolsChanged' };
+    for (const port of ports) {
+      try {
+        port.postMessage(notification);
+      } catch {
+        // 端口可能已断开（onDisconnect 会清理），跳过即可
+      }
+    }
+  };
 
   const onMessage = (port: chrome.runtime.Port, message: unknown): void => {
     if (
@@ -132,9 +157,12 @@ export function startPageToolsBridge(client: Client): () => void {
 
   chrome.runtime.onConnect.addListener(onConnect);
 
-  return () => {
-    chrome.runtime.onConnect.removeListener(onConnect);
-    for (const port of ports) port.disconnect();
-    ports.clear();
+  return {
+    stop: () => {
+      chrome.runtime.onConnect.removeListener(onConnect);
+      for (const port of ports) port.disconnect();
+      ports.clear();
+    },
+    notifyToolsChanged,
   };
 }

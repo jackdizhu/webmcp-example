@@ -1,5 +1,7 @@
-// 侧边栏侧的页面工具客户端：通过 chrome.runtime 长连接与 content script 桥接通信。
-// 断线自动重连：Port 断开后，下一次请求前重新建立连接。
+// 侧边栏侧的页面工具客户端：通过 chrome.tabs 长连接与活动标签页的 content script 桥接通信。
+// 通道说明：扩展页面 → content script 必须用 chrome.tabs.connect(tabId)（官方文档明确
+// runtime.connect 只在扩展进程上下文间投递，到不了 content script）。
+// 断线自动重连：Port 断开后按指数退避重连；切换活动标签页时自动跟随新页面。
 import {
   PAGE_TOOLS_PORT_NAME,
   type PageToolMeta,
@@ -14,6 +16,8 @@ export interface PageToolsClient {
   callTool(name: string, args: Record<string, unknown>): Promise<unknown>;
   /** 连接状态变化回调（返回取消订阅函数）。 */
   onStatusChange(listener: (connected: boolean) => void): () => void;
+  /** 页面工具清单变化（桥接 toolsChanged 推送）回调（返回取消订阅函数）。 */
+  onToolsChange(listener: () => void): () => void;
   /** 主动断开（侧边栏卸载时调用）。 */
   disconnect(): void;
 }
@@ -60,6 +64,25 @@ const RECONNECT_DELAY_MAX_MS = 15_000;
 /** 重连探活 ping 的超时（远短于业务请求）。 */
 const RECONNECT_PING_TIMEOUT_MS = 5_000;
 
+/** 读取 chrome.tabs.onActivated（测试环境可能无 chrome 全局，需安全访问）。 */
+function getTabsOnActivated(): { addListener(cb: (info: { tabId: number }) => void): void; removeListener(cb: (info: { tabId: number }) => void): void } | undefined {
+  return (globalThis as {
+    chrome?: { tabs?: { onActivated?: { addListener(cb: (info: { tabId: number }) => void): void; removeListener(cb: (info: { tabId: number }) => void): void } } };
+  }).chrome?.tabs?.onActivated;
+}
+
+/**
+ * 默认连接工厂：查询当前窗口活动标签页，建立到其 content script 桥接的长连接。
+ * 目标标签页上没有桥接时不会同步报错——Port 会在异步 onDisconnect 中失败，由重连逻辑兜底。
+ */
+async function defaultPortFactory(): Promise<chrome.runtime.Port> {
+  const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+  if (!tab || tab.id === undefined) {
+    throw new Error('未找到可连接的活动标签页');
+  }
+  return chrome.tabs.connect(tab.id, { name: PAGE_TOOLS_PORT_NAME });
+}
+
 /** 从 chrome.storage.local 读取设置，缺省项回退默认值。 */
 export async function loadSettings(storage: {
   get: typeof chrome.storage.local.get;
@@ -91,20 +114,26 @@ export async function saveSettings(
 /**
  * 建立页面工具客户端。
  *
+ * 连接目标：活动标签页的 content script 桥接（chrome.tabs.connect）。切换活动
+ * 标签页时自动断开旧连接并重连到新页面的桥接。
+ *
  * 在线判定：Port 建立 ≠ 在线，收到该 Port 上的首条响应才置在线（避免接收端
  * 不存在时的在线/离线抖动）；断开或探活失败则置离线。
  *
  * 断线恢复策略：Port 断开后按指数退避（1s 起、15s 封顶）主动重连，重连以
  * listTools ping 成功为准；期间既有请求按原语义失败（拒绝并提示将重连）。
  *
- * @param portFactory 创建 Port 的工厂（默认 chrome.runtime.connect，测试可注入桩）
+ * @param portFactory 创建 Port 的工厂（默认 tabs.connect 活动标签页，测试可注入桩，
+ *        允许同步返回或 Promise）
  * @param requestTimeoutMs 单请求超时（毫秒），默认 30s（工具执行可能较慢）
  */
 export function connectPageTools(
-  portFactory: () => chrome.runtime.Port = () => chrome.runtime.connect({ name: PAGE_TOOLS_PORT_NAME }),
+  portFactory: () => chrome.runtime.Port | Promise<chrome.runtime.Port> = defaultPortFactory,
   requestTimeoutMs = 30_000
 ): PageToolsClient {
   let port: chrome.runtime.Port | undefined;
+  /** 进行中的端口创建（异步工厂去重）。 */
+  let portCreation: Promise<chrome.runtime.Port> | null = null;
   let connected = false;
   /** disconnect() 后置位，终止重连循环。 */
   let disposed = false;
@@ -113,6 +142,7 @@ export function connectPageTools(
   let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   const pending = new Map<number, { resolve: (value: PageToolsResponse) => void; reject: (error: Error) => void }>();
   const statusListeners = new Set<(connected: boolean) => void>();
+  const toolsListeners = new Set<() => void>();
 
   const notifyStatus = (value: boolean): void => {
     connected = value;
@@ -153,10 +183,26 @@ export function connectPageTools(
     }
   };
 
-  const ensurePort = (): chrome.runtime.Port => {
-    if (port) return port;
-    const fresh = portFactory();
+  /** 统一的断开清理：清空端口引用、拒绝挂起请求、置离线。 */
+  const teardownPort = (reason: Error): void => {
+    port = undefined;
+    for (const [, waiter] of pending) waiter.reject(reason);
+    pending.clear();
+    notifyStatus(false);
+  };
+
+  /** 注册端口监听并记录为当前端口。 */
+  const attachPort = (fresh: chrome.runtime.Port): chrome.runtime.Port => {
     fresh.onMessage.addListener((message: unknown) => {
+      // 桥接单向通知：页面工具清单变化（无 id，区别于请求响应）
+      if (
+        typeof message === 'object' &&
+        message !== null &&
+        (message as { type?: unknown })['type'] === 'toolsChanged'
+      ) {
+        for (const listener of toolsListeners) listener();
+        return;
+      }
       const response = message as PageToolsResponse;
       const waiter = pending.get(response.id);
       if (!waiter) return;
@@ -171,15 +217,12 @@ export function connectPageTools(
     fresh.onDisconnect.addListener(() => {
       // 必须读取 lastError，否则 Chrome 打印 Unchecked runtime.lastError 告警
       const chromeError = consumeRuntimeLastError();
-      port = undefined;
       const error = new Error(
         chromeError
           ? `与页面工具桥接的连接已断开（${chromeError}），将自动重连`
           : '与页面工具桥接的连接已断开（页面可能正在跳转），将自动重连'
       );
-      for (const [, waiter] of pending) waiter.reject(error);
-      pending.clear();
-      notifyStatus(false);
+      teardownPort(error);
       // 主动重连：content script 就绪晚于侧栏（或页面跳转后）也能自动恢复
       scheduleReconnect();
     });
@@ -187,8 +230,32 @@ export function connectPageTools(
     return fresh;
   };
 
-  const request = (req: Omit<PageToolsRequest, 'id'>, timeoutMs: number = requestTimeoutMs): Promise<PageToolsResponse> => {
-    const fresh = ensurePort();
+  /** 获取（或异步创建）当前端口；工厂为异步时用 portCreation 去重并发创建。 */
+  const ensurePort = (): Promise<chrome.runtime.Port> => {
+    if (port) return Promise.resolve(port);
+    if (!portCreation) {
+      portCreation = Promise.resolve(portFactory())
+        .then((fresh) => {
+          portCreation = null;
+          if (disposed) {
+            fresh.disconnect();
+            throw new Error('页面工具客户端已释放');
+          }
+          return attachPort(fresh);
+        })
+        .catch((error: unknown) => {
+          portCreation = null;
+          throw error instanceof Error ? error : new Error(String(error));
+        });
+    }
+    return portCreation;
+  };
+
+  const request = async (
+    req: Omit<PageToolsRequest, 'id'>,
+    timeoutMs: number = requestTimeoutMs
+  ): Promise<PageToolsResponse> => {
+    const fresh = await ensurePort();
     const id = nextId;
     nextId += 1;
     return new Promise<PageToolsResponse>((resolve, reject) => {
@@ -210,6 +277,17 @@ export function connectPageTools(
     });
   };
 
+  /** 切换活动标签页：断开旧连接，重连循环自动跟随新页面的桥接。 */
+  const onTabActivated = (): void => {
+    if (disposed || !port) return;
+    // 本地主动断开不会触发自身 onDisconnect，需手动走统一清理
+    port.disconnect();
+    teardownPort(new Error('活动标签页已切换，正在重连新页面的工具桥接'));
+    reconnectDelayMs = RECONNECT_DELAY_INITIAL_MS;
+    scheduleReconnect();
+  };
+  getTabsOnActivated()?.addListener(onTabActivated);
+
   return {
     async listTools() {
       const response = await request({ type: 'listTools' });
@@ -226,11 +304,17 @@ export function connectPageTools(
       listener(connected);
       return () => statusListeners.delete(listener);
     },
+    onToolsChange(listener) {
+      toolsListeners.add(listener);
+      return () => toolsListeners.delete(listener);
+    },
     disconnect() {
       disposed = true;
       clearReconnectTimer();
       port?.disconnect();
       port = undefined;
+      portCreation = null;
+      getTabsOnActivated()?.removeListener(onTabActivated);
       notifyStatus(false);
     },
   };

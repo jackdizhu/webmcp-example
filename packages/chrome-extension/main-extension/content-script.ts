@@ -1,6 +1,9 @@
 import { connectWebMCPClient } from '../core/content-script';
-import { startPageToolsBridge } from '../core/page-tools-bridge';
+import { startPageToolsBridge, type PageToolsBridgeHandle } from '../core/page-tools-bridge';
 import type { Client } from '@modelcontextprotocol/client';
+
+/** 桥接句柄：listChanged 回调在握手期间注册，广播时桥接可能尚未建立，故用可空引用。 */
+let bridge: PageToolsBridgeHandle | null = null;
 
 async function waitForDocument(): Promise<void> {
   if (document.readyState !== 'loading') return;
@@ -50,6 +53,8 @@ async function connectWithRetry(): Promise<Client> {
                     console.error('[WebMCP] Failed to refresh page tools:', error);
                     return;
                   }
+                  // 页面动态注册/注销工具时向侧栏广播，侧栏订阅后刷新清单展示
+                  bridge?.notifyToolsChanged();
                   console.info(
                     '[WebMCP] Page tools updated:',
                     tools.map(({ name }) => name)
@@ -78,7 +83,7 @@ async function main(): Promise<void> {
 
   // 握手成功即注册桥接（不等 DOM ready / 初始工具清单），把侧栏可连接窗口最早化。
   // 桥接生命周期与 content script 一致：文档销毁时随上下文一并回收，无需手动停止。
-  startPageToolsBridge(client);
+  bridge = startPageToolsBridge(client);
 
   // Keep this connection alive across BFCache restores; document teardown owns final cleanup.
   await waitForDocument();

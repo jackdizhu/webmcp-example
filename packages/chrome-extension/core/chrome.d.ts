@@ -38,6 +38,28 @@ declare namespace chrome {
     };
   }
 
+  namespace tabs {
+    /** 标签页信息（本工程仅使用 id）。 */
+    interface Tab {
+      id?: number;
+    }
+
+    /** 查询标签页（Promise 形式，Chrome 88+）。 */
+    function query(queryInfo: { active?: boolean; currentWindow?: boolean }): Promise<Tab[]>;
+
+    /**
+     * 建立到指定标签页 content script 的长连接。
+     * 扩展页面 → content script 的标准通道（runtime.connect 到不了 content script）。
+     */
+    function connect(tabId: number, connectInfo?: { name?: string }): Port;
+
+    /** 活动标签页切换事件。 */
+    const onActivated: {
+      addListener(callback: (activeInfo: { tabId: number }) => void): void;
+      removeListener(callback: (activeInfo: { tabId: number }) => void): void;
+    };
+  }
+
   namespace storage {
     namespace local {
       /** Promise 形式自 Chrome 88 起可用（本扩展 minimum_chrome_version 为 114）。 */

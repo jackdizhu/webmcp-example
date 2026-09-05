@@ -57,6 +57,7 @@ export const App = defineComponent({
 
     let pageTools: PageToolsClient | null = null;
     let unsubscribeStatus: (() => void) | null = null;
+    let unsubscribeToolsChange: (() => void) | null = null;
     // agent 循环的多轮对话历史（不含 system 消息），跨轮次保留上下文
     let history: ChatMessage[] = [];
 
@@ -261,14 +262,22 @@ export const App = defineComponent({
       pageTools = connectPageTools();
       pageToolsRef.value = pageTools;
       unsubscribeStatus = pageTools.onStatusChange((value) => {
+        const wasConnected = connected.value;
         connected.value = value;
         logEvent(value ? 'info' : 'warn', 'bridge', value ? 'bridge_connected' : 'bridge_disconnected');
+        // 恢复在线即刷新清单：挂载时桥接往往未就绪，首次拉取会失败停在 0
+        if (!wasConnected && value) void refreshTools();
+      });
+      // 页面动态注册/注销工具（桥接 toolsChanged 推送）时同步侧栏展示
+      unsubscribeToolsChange = pageTools.onToolsChange(() => {
+        void refreshTools();
       });
       await refreshTools();
     });
 
     onUnmounted(() => {
       unsubscribeStatus?.();
+      unsubscribeToolsChange?.();
       pageTools?.disconnect();
       pageTools = null;
     });
