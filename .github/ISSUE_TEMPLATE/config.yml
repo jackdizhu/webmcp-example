@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: 项目主页
+    url: https://github.com/<owner>/webmcp-example
+    about: 查看项目说明、配置与使用文档
+  - name: 使用文档
+    url: https://github.com/<owner>/webmcp-example/blob/main/README.md
+    about: 阅读 README 与 docs/ 后再提问，避免重复问题

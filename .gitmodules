@@ -1,0 +1,6 @@
+[submodule "git-source/webmcp-tools"]
+	path = git-source/webmcp-tools
+	url = git@github.com:GoogleChromeLabs/webmcp-tools.git
+[submodule "git-source/npm-packages"]
+	path = git-source/npm-packages
+	url = git@github.com:WebMCP-org/npm-packages.git

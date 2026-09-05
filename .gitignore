@@ -141,3 +141,7 @@ dist
 vite.config.js.timestamp-*
 vite.config.ts.timestamp-*
 .vite/
+
+# Git source
+git-source/npm-packages/
+git-source/webmcp-tools/
