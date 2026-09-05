@@ -169,6 +169,27 @@ export const App = defineComponent({
       await runTurn(composeHandoffMessage(run));
     };
 
+    /** 设置面板「快速切换调试模式」：立即持久化并生效，不等「保存」按钮。 */
+    const toggleDebugMode = async (): Promise<void> => {
+      settings.debugMode = !settings.debugMode;
+      await saveSettings({
+        apiKey: settings.apiKey,
+        baseUrl: settings.baseUrl,
+        model: settings.model,
+        debugMode: settings.debugMode,
+        consoleOutput: settings.consoleOutput,
+      });
+      logEvent('info', 'app', 'debug_mode_toggled', settings.debugMode ? 'on' : 'off');
+      if (settings.debugMode) {
+        // 开启：关闭设置面板并直达调试 Tab（一键入口的核心诉求）
+        showSettings.value = false;
+        activeTab.value = 'debug';
+      } else if (activeTab.value === 'debug') {
+        // 关闭：若停留在调试 Tab 则切回对话，设置面板保持打开
+        activeTab.value = 'chat';
+      }
+    };
+
     const persistSettings = async (): Promise<void> => {
       await saveSettings({
         apiKey: settings.apiKey,
@@ -278,6 +299,7 @@ export const App = defineComponent({
               logCountText: logCountText.value,
               logHint: logHint.value,
               onSave: () => void persistSettings(),
+              onToggleDebug: () => void toggleDebugMode(),
               onExportLogs: () => void handleExportLogs(),
               onClearLogs: () => void handleClearLogs(),
             })

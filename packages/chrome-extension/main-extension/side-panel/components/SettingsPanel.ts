@@ -17,6 +17,8 @@ export const SettingsPanel = defineComponent({
     save: null,
     'export-logs': null,
     'clear-logs': null,
+    /** 快速切换调试模式（立即持久化并生效，不等「保存」）。 */
+    'toggle-debug': null,
   },
   setup(props, { emit }) {
     const textInput = (
@@ -55,6 +57,12 @@ export const SettingsPanel = defineComponent({
         textInput('Base URL', 'baseUrl', { type: 'text', placeholder: 'https://api.deepseek.com/v1' }),
         textInput('模型', 'model', { type: 'text', placeholder: 'deepseek-chat' }),
         checkbox('debugMode', '调试模式（开启「调试」Tab，可不经 LLM 手动执行工具）'),
+        // 快速切换：无 Key 用户的一键直达入口（立即生效，不依赖「保存」按钮）
+        h(
+          'button',
+          { class: 'ghost', type: 'button', onClick: () => emit('toggle-debug') },
+          props.settings.debugMode ? '⚡ 快速关闭调试模式' : '⚡ 快速开启调试模式（无需 API Key，手动执行工具）'
+        ),
         checkbox(
           'consoleOutput',
           '控制台输出（开启后日志同步打印到控制台，带 [traceId] 前缀；默认仅写本地日志）'

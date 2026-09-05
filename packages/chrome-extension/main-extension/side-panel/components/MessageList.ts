@@ -30,11 +30,12 @@ export const MessageList = defineComponent({
         },
         [
           props.messages.length === 0
-            ? h(
-                'p',
-                { class: 'empty' },
-                '与 agent 对话来发现并验证当前页面的 WebMCP 工具，例如："列出页面工具，并逐个调用验证返回"。'
-              )
+            ? h('div', { class: 'empty' }, [
+                h('p', '两种方式验证页面的 WebMCP 工具：'),
+                h('p', '对话 —— 与 agent 对话来发现并调用页面工具（需在「设置」中配置 API Key）；'),
+                h('p', '调试 —— 不经 LLM 手动执行工具并查看结果（无需 Key，入口在「设置」面板）。'),
+                h('p', '例如："列出页面工具，并逐个调用验证返回"。'),
+              ])
             : null,
           ...props.messages.map((message, index) =>
             h('div', { class: ['msg', `msg-${message.role}`], key: index }, [
