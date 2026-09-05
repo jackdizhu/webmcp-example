@@ -25,7 +25,8 @@ export async function initLogger(): Promise<void> {
   try {
     db = await openLoggerDb();
     await db.rotate(Date.now());
-  } catch {
+  } catch (error) {
+    console.error('日志库初始化失败:', error);
     // 日志库不可用不影响主功能，写入时静默丢弃
     db = null;
   }
@@ -70,8 +71,9 @@ export async function flushLogs(): Promise<void> {
   queue = [];
   try {
     await db.append(batch);
-  } catch {
+  } catch (error) {
     // 静默失败：日志写入不阻塞业务
+    console.error('日志写入失败:', error);
   }
 }
 
@@ -103,7 +105,8 @@ export async function logCount(): Promise<number> {
   if (!db) return 0;
   try {
     return await db.count();
-  } catch {
+  } catch (error) {
+    console.error('日志库计数失败:', error);
     return 0;
   }
 }
@@ -118,7 +121,8 @@ export async function exportLogs(): Promise<string | null> {
   let entries: LogEntry[];
   try {
     entries = await db.readAll();
-  } catch {
+  } catch (error) {
+    console.error('日志库读取失败:', error);
     return null;
   }
   if (entries.length === 0) return null;
@@ -140,7 +144,8 @@ export async function readLogsByTrace(traceId: string): Promise<LogEntry[]> {
   if (!db) return [];
   try {
     return await db.readByTrace(traceId);
-  } catch {
+  } catch (error) {
+    console.error('日志库读取失败:', error);
     return [];
   }
 }
@@ -151,7 +156,8 @@ export async function clearLogs(): Promise<void> {
   if (!db) return;
   try {
     await db.clear();
-  } catch {
+  } catch (error) {
+    console.error('日志库清空失败:', error);
     // 静默失败
   }
 }
