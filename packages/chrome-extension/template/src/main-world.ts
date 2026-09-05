@@ -1,1 +1,0 @@
-import '@mcp-b/global';

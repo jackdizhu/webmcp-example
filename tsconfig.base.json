@@ -1,0 +1,38 @@
+{
+  "compilerOptions": {
+    // Module system
+    "target": "ES2022",
+    "module": "ESNext",
+    "lib": ["ES2024", "DOM", "DOM.Iterable"],
+    "moduleResolution": "bundler",
+    "jsx": "react-jsx",
+
+    // Strict type checking（增强安全性）
+    "strict": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "noImplicitReturns": true,
+    "noFallthroughCasesInSwitch": true,
+    "noUncheckedIndexedAccess": true,
+    "exactOptionalPropertyTypes": true,
+    "noImplicitOverride": true,
+    "noPropertyAccessFromIndexSignature": false,
+
+    // Output
+    "declaration": true,
+    "declarationMap": false,
+    "sourceMap": true,
+    "incremental": false,
+
+    // Interop
+    "esModuleInterop": true,
+    "allowSyntheticDefaultImports": true,
+    "forceConsistentCasingInFileNames": true,
+    "isolatedModules": true,
+
+    // Other
+    "skipLibCheck": true,
+    "resolveJsonModule": true
+  },
+  "$schema": "https://json.schemastore.org/tsconfig"
+}

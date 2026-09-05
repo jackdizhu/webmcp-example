@@ -2,12 +2,9 @@
   "extends": "./tsconfig.json",
   "compilerOptions": {
     "noEmit": true,
-    "rootDir": "../..",
-    "types": ["node"],
-    "paths": {
-      "@mcp-b/webmcp-extension/content-script": ["./src/content-script.ts"]
-    }
+    "rootDir": ".",
+    "types": ["node"]
   },
-  "include": ["src/**/*", "e2e/**/*.ts", "template/**/*.ts", "vite.config.ts"],
-  "exclude": ["node_modules", "dist", "e2e/dist", "template/dist"]
+  "include": ["core/**/*", "shell/**/*", "main-extension/**/*", "e2e-extension/**/*.ts", "vite.config.ts"],
+  "exclude": ["node_modules", "dist", "e2e-extension/dist"]
 }

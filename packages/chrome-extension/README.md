@@ -1,155 +1,92 @@
 # `@mcp-b/webmcp-extension`
 
-Install WebMCP from a Chromium extension, then discover and call the page's
-imperative and declarative tools from an isolated content script.
+Chromium 扩展：在页面注入 WebMCP，并从隔离世界（isolated world）发现、调用页面暴露的工具。
 
-The page API stays native-shaped: websites register JavaScript tools with
-`document.modelContext` or declare form tools in HTML. The extension-side helper
-returns the official MCP `Client`, with its normal `listTools()`, `callTool()`,
-and `close()` methods.
+属于本工程的 **agent 能力层** —— 页面侧（`html-app`）负责注册工具，本扩展负责发现与调用，
+两者只通过 WebMCP 工具接口通信，不互相依赖内部实现。
 
-## Install
+## 目录结构
 
-```bash
-pnpm add @mcp-b/global @mcp-b/webmcp-extension
-```
+| 路径 | 作用 |
+| ---- | ---- |
+| `shell/` | **共享扩展外壳，两个构建共用**：`manifest.json` 与 MAIN world 入口 `main-world.ts` |
+| `core/` | **共享核心逻辑**：`content-script.ts` 导出 `connectWebMCPClient`（agent 能力层） |
+| `main-extension/` | 主扩展项目：给人手动加载，content script 打印页面工具列表 |
+| `e2e-extension/` | e2e 扩展项目（自包含）：测试驱动的 content script + Playwright 断言 |
 
-## Set up the extension
+### 为什么共享部分要单独抽出来
 
-Declare the runtime and client as static `document_start` content scripts: install WebMCP in the page's `MAIN` world, then connect from the default isolated world. `world: "MAIN"` requires Chrome 111 or newer. See Chrome's [content-script guide](https://developer.chrome.com/docs/extensions/develop/concepts/content-scripts) and [`content_scripts` manifest reference](https://developer.chrome.com/docs/extensions/reference/manifest/content-scripts).
+两个扩展的差异**只在隔离世界的 content script**，而以下部分完全一致，因此抽到独立文件夹：
 
-```json
-{
-  "manifest_version": 3,
-  "name": "My WebMCP Extension",
-  "version": "1.0.0",
-  "minimum_chrome_version": "111",
-  "content_scripts": [
-    {
-      "matches": ["https://*/*", "http://localhost/*", "http://127.0.0.1/*"],
-      "js": ["main-world.iife.js"],
-      "run_at": "document_start",
-      "world": "MAIN"
-    },
-    {
-      "matches": ["https://*/*", "http://localhost/*", "http://127.0.0.1/*"],
-      "js": ["content-script.iife.js"],
-      "run_at": "document_start"
-    }
-  ]
-}
-```
+- `shell/`：manifest 与 main-world 入口。新增一个扩展只需换掉 content script，不必复制外壳。
+  `shell/main-world.ts` 只有一行 `import '@mcp-b/global'`，跑在页面 MAIN world，负责把
+  WebMCP 运行时装进页面（原生支持用原生，否则降级 polyfill）。
+- `core/`：隔离世界的 `connectWebMCPClient` 是两份 content script 的共同依赖，抽到 `core/`
+  避免重复实现。
 
-The MAIN-world entry only installs the runtime:
+### 为什么分两个目录而不是覆盖同一份
 
-```ts
-// main-world.ts
-import '@mcp-b/global';
-```
+manifest 里声明的文件名是固定的（`main-world.iife.js` / `content-script.iife.js`），而两份
+content script 行为不同（一个面向使用、打印工具，一个面向断言、驱动测试），放在同一目录会
+互相覆盖。因此主扩展产物在 `dist/`，e2e 扩展产物在 `e2e-extension/dist/`。
 
-Page code continues to use `document.modelContext` directly:
+## 两个独立扩展构建
 
-```ts
-await document.modelContext.registerTool({
-  name: 'get_cart',
-  description: 'Read the current shopping cart.',
-  execute: () => ({
-    content: [{ type: 'text', text: JSON.stringify(readCart()) }],
-  }),
-});
-```
+| 构建 | 命令 | 产物 | 用途 |
+| ---- | ---- | ---- | ---- |
+| `main-extension` | `pnpm build` | `dist/` | 手动加载调试，控制台打印页面工具列表 |
+| `e2e-extension` | `pnpm build:e2e` | `e2e-extension/dist/` | Playwright 自动加载并断言 |
 
-Annotated forms use the same extension connection:
+两个产物结构相同（`manifest.json` + `main-world.iife.js` + `content-script.iife.js`），
+都是 IIFE 自包含 classic script —— content script 无法在运行时解析裸导入，依赖必须全部内联。
 
-```html
-<form
-  toolname="extension_declarative"
-  tooldescription="Submit a value through an annotated form."
-  toolautosubmit
->
-  <input name="value" toolparamdescription="Value to submit" required />
-  <button type="submit">Submit</button>
-</form>
-```
-
-`@mcp-b/global` uses native declarative support when available and installs the
-polyfilled form runtime otherwise. Imperative registrations and annotated forms
-both appear in `client.listTools()` and run through `client.callTool()`. The
-extension adds no separate DOM scanner or declarative client API. See the
-[declarative API reference](https://docs.mcp-b.ai/reference/webmcp/declarative-api)
-for the evolving browser behavior and polyfill compatibility boundary.
-
-Native Chrome also includes imperative and declarative tools owned by
-same-origin child documents in the top-level client's tool list. This uses the
-browser's frame-tree discovery; the extension does not inject into those child
-frames. The polyfilled path remains scoped to the top document.
-
-Connect from the isolated content script and use the standard client API:
-
-```ts
-// content-script.ts
-import { connectWebMCPClient } from '@mcp-b/webmcp-extension/content-script';
-
-const client = await connectWebMCPClient({
-  name: 'my-extension',
-  version: '1.0.0',
-});
-
-const { tools } = await client.listTools();
-const result = await client.callTool({
-  name: 'get_cart',
-  arguments: {},
-});
-
-await client.close();
-```
-
-Pass the official MCP `ClientOptions` as the second argument when you need list-change handlers, validation, caching, or input-required behavior. The template uses `listChanged.tools` so tools registered after page hydration appear automatically.
-
-Bundle each entry as a self-contained classic script. Extension content scripts cannot load bare npm imports at runtime.
-
-## Start from the template
-
-The published package includes a minimal buildable extension in [`template`](./template):
+## 快速开始
 
 ```bash
-cp -R node_modules/@mcp-b/webmcp-extension/template my-webmcp-extension
-cd my-webmcp-extension
-pnpm install
-pnpm build
+pnpm build                      # 产出可直接加载的扩展 dist/
+pnpm --filter html-app dev      # 另开终端，启动示例页面
 ```
 
-Load `dist/` as an unpacked extension from `chrome://extensions`.
+1. 打开 `chrome://extensions`，开启"开发者模式"
+2. "加载已解压的扩展程序" → 选择 `packages/chrome-extension/dist`
+3. 访问 `http://localhost:5173`，DevTools 控制台应打印 `[WebMCP] Page tools: [...]`
 
-## Security and scope
+开发时改用 `pnpm dev`（watch），改完源码在扩展卡片点"刷新"即可，无需反复 build。
 
-- MAIN-world code shares the website's JavaScript environment. Keep extension secrets, credentials, and privileged Chrome API calls out of `main-world.ts`.
-- The client transport pins messages to `window.location.origin`; it does not use a wildcard origin. This is routing, not authentication: same-page code can observe or forge the channel. Treat page tool metadata, arguments, and results as untrusted, and never authorize privileged extension actions from them alone.
-- The template needs no extension API permissions, background worker, or `web_accessible_resources` declaration. Its match patterns declare the page access it needs.
-- Narrow the manifest match patterns to the sites your extension actually supports before publishing it.
-- Add icons and the remaining Chrome Web Store listing metadata before publishing; the included manifest is a runnable development baseline.
-- The template injects into top-level pages only. Native Chrome still discovers
-  same-origin child-document tools through `getTools()`.
-- Cross-origin imperative tools require `allow="tools"`, `exposedTo`, and an
-  explicit `fromOrigins` request. The extension client does not make that
-  request. Declarative tools currently have no cross-origin exposure attribute.
-- Native Chrome resolves `executeTool()` with `null` when a tool navigates. The
-  extension client reports that as an interrupted MCP call and does not carry
-  calls across navigation or read JSON-LD from the destination document. Use
-  `SubmitEvent.respondWith()` when a declarative tool must return a result
-  without navigation.
+## 职责
 
-## Test
+| 能力 | 说明 |
+| ---- | ---- |
+| 发现 | 读取目标页面 `document.modelContext.getTools()` 暴露的工具 |
+| 校验 | 依据工具 `inputSchema` 校验代理传入参数 |
+| 执行 | 通过 `executeTool(tool, input)` 或 MCP Client 调用页面工具 |
+| 验证 | 获取执行结果并与预期比对，形成验证闭环 |
+
+## 关键约束
+
+- 插件特权 API、密钥仅保留在**隔离世界**。`shell/main-world.ts` 与页面共享 JavaScript
+  环境，不得放入敏感逻辑。
+- 避免耦合 `html-app` 页面内部实现细节，只依赖其暴露的 WebMCP 工具接口。
+- 客户端 transport 把消息固定到 `window.location.origin`，这是路由而非鉴权：
+  同源页面代码可以观测或伪造该通道。页面工具的参数与结果一律视为不可信输入。
+- 发布前收窄 `shell/manifest.json` 的 match patterns，并补齐图标等商店元数据。
+- 该扩展只注入顶层页面。原生 Chrome 仍会通过 `getTools()` 发现同源子文档的工具。
+
+## 测试
 
 ```bash
-pnpm --filter @mcp-b/webmcp-extension test:e2e
+pnpm test        # 单元测试（仅 core 纯逻辑）
+pnpm test:e2e    # 端到端（需先 pnpm exec playwright install，并 pnpm build:e2e）
 ```
 
-The test smoke-builds the copyable template with its own config, then loads its
-manifest and runtime as a real unpacked MV3 extension in Playwright's bundled
-Chromium. It covers document-start injection, strict page CSP, imperative and
-declarative discovery and calls, `toolautosubmit`, `respondWith()`, list-change
-handling, tool errors, dynamic registration and removal, top-frame scoping,
-navigation, and BFCache restoration. A native Chromium lane also covers
-same-origin child-document imperative and declarative tools. See Playwright's
-[Chrome extension testing guide](https://playwright.dev/docs/chrome-extensions).
+e2e 覆盖 document_start 注入、严格页面 CSP、命令式与声明式工具的发现与调用、
+`toolautosubmit`、`respondWith()`、工具列表变更、工具错误、动态注册与移除、
+顶层框架作用域、导航与 BFCache 恢复，另有一条原生 Chromium 通道验证同源子文档工具。
+
+## 参考
+
+- `git-source/webmcp-tools/model-context-tool-inspector`：WebMCP 工具检查器
+  （发现 / schema 可视化 / 连接调试），是本包的参考实现。
+- 上游来源：WebMCP-org/npm-packages 的 `webmcp-extension` 包。
+- 架构细节：[docs/architecture.md](../../docs/architecture.md)。
+- AI 工作指引：[AGENT.md](../../AGENT.md)。

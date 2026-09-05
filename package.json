@@ -1,0 +1,31 @@
+{
+  "name": "webmcp-example",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "packageManager": "pnpm@10.14.0",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "dev": "pnpm -r --parallel run dev",
+    "dev:app": "pnpm --filter @mcp-b/example-vanilla dev",
+    "dev:ext": "pnpm --filter @mcp-b/webmcp-extension dev",
+    "build": "pnpm -r run build",
+    "typecheck": "pnpm -r run typecheck",
+    "lint": "eslint .",
+    "test": "pnpm -r run test",
+    "clean": "pnpm -r run clean",
+    "format": "eslint . --fix",
+    "changeset": "changeset",
+    "version": "changeset version",
+    "release": "changeset publish"
+  },
+  "devDependencies": {
+    "@changesets/cli": "^2.27.0",
+    "@eslint/js": "^9.0.0",
+    "eslint": "^9.0.0",
+    "typescript": "^5.8.3",
+    "typescript-eslint": "^8.0.0"
+  }
+}

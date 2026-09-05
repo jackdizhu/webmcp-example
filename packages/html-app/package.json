@@ -5,14 +5,21 @@
   "type": "module",
   "scripts": {
     "build": "tsc && vite build",
-    "dev": "vite dev",
-    "preview": "vite preview"
+    "dev": "vite",
+    "preview": "vite preview",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint .",
+    "test": "vitest run",
+    "clean": "rm -rf dist"
   },
   "dependencies": {
-    "@mcp-b/webmcp-polyfill": "workspace:*"
+    "@mcp-b/webmcp-polyfill": "catalog:"
   },
   "devDependencies": {
+    "@mcp-b/webmcp-types": "catalog:",
+    "eslint": "catalog:",
     "typescript": "~5.9.3",
-    "vite": "^8.2.2"
+    "vite": "^8.2.2",
+    "vitest": "catalog:"
   }
 }

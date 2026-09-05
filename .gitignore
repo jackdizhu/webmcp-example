@@ -127,6 +127,8 @@ dist
 
 # pnpm
 .pnpm-store
+# pnpm 安装中断时可能遗留的临时文件
+_tmp_*
 
 # yarn v3
 .pnp.*
@@ -145,3 +147,7 @@ vite.config.ts.timestamp-*
 # Git source
 git-source/npm-packages/
 git-source/webmcp-tools/
+
+# work
+.workbuddy/
+.treawork/

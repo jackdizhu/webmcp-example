@@ -1,4 +1,4 @@
-import { connectWebMCPClient } from '@mcp-b/webmcp-extension/content-script';
+import { connectWebMCPClient } from '../core/content-script';
 
 async function waitForDocument(): Promise<void> {
   if (document.readyState !== 'loading') return;
@@ -10,7 +10,7 @@ async function waitForDocument(): Promise<void> {
 async function main(): Promise<void> {
   const client = await connectWebMCPClient(
     {
-      name: 'webmcp-extension-template',
+      name: 'webmcp-extension-main',
       version: '1.0.0',
     },
     {

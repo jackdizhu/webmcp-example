@@ -1,4 +1,4 @@
-import { connectWebMCPClient } from '@mcp-b/webmcp-extension/content-script';
+import { connectWebMCPClient } from '../core/content-script';
 import type { CallToolResult, Client } from '@modelcontextprotocol/client';
 
 async function waitForDocument(): Promise<void> {

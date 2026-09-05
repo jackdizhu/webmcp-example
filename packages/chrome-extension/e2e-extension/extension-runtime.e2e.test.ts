@@ -8,7 +8,7 @@ import { fileURLToPath } from 'node:url';
 import { chromium, type BrowserContext, type Page } from 'playwright';
 
 const packageDirectory = resolve(dirname(fileURLToPath(import.meta.url)), '..');
-const extensionDirectory = resolve(packageDirectory, 'e2e/dist/extension');
+const extensionDirectory = resolve(packageDirectory, 'e2e-extension/dist');
 const chromiumExecutablePath = process.env.PLAYWRIGHT_EXTENSION_CHROMIUM_EXECUTABLE_PATH;
 const enableNativeWebMCP = process.env.PLAYWRIGHT_EXTENSION_ENABLE_WEBMCP_FLAGS === '1';
 
@@ -231,7 +231,7 @@ async function readOutcome(page: Page): Promise<Record<string, string | undefine
   return page.evaluate(() => ({ ...document.documentElement.dataset }));
 }
 
-describe('WebMCP extension template', () => {
+describe('WebMCP extension (e2e)', () => {
   it(
     'injects the page runtime and calls its tools from an isolated content script across navigations',
     { timeout: 60_000 },

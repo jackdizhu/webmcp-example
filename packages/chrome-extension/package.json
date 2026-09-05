@@ -1,21 +1,8 @@
 {
   "name": "@mcp-b/webmcp-extension",
   "version": "5.1.0",
-  "description": "Inject WebMCP from a Chromium extension and call page tools from an isolated content script",
-  "keywords": [
-    "browser-extension",
-    "chrome-extension",
-    "content-script",
-    "manifest-v3",
-    "mcp",
-    "model-context-protocol",
-    "polyfill",
-    "webmcp"
-  ],
-  "homepage": "https://github.com/WebMCP-org/npm-packages/tree/main/packages/webmcp-extension#readme",
-  "bugs": {
-    "url": "https://github.com/WebMCP-org/npm-packages/issues"
-  },
+  "description": "Chromium 扩展：在页面注入 WebMCP，并从隔离世界发现、调用页面暴露的工具",
+  "private": true,
   "license": "MIT",
   "author": "Alex Nahas",
   "repository": {
@@ -23,49 +10,34 @@
     "url": "git+https://github.com/WebMCP-org/npm-packages.git",
     "directory": "packages/webmcp-extension"
   },
-  "files": [
-    "dist",
-    "template/README.md",
-    "template/manifest.json",
-    "template/package.json",
-    "template/src",
-    "template/tsconfig.json",
-    "template/vite.config.ts"
-  ],
   "type": "module",
-  "sideEffects": false,
-  "exports": {
-    "./content-script": {
-      "types": "./dist/content-script.d.ts",
-      "import": "./dist/content-script.js"
-    }
-  },
-  "publishConfig": {
-    "access": "public",
-    "registry": "https://registry.npmjs.org/"
-  },
   "scripts": {
-    "build": "vp pack --filter package",
+    "build": "rm -rf dist && vp pack --filter main-extension-main-world --filter main-extension-content-script",
+    "build:e2e": "rm -rf e2e-extension/dist && vp pack --filter e2e-extension-main-world --filter e2e-extension-content-script",
+    "dev": "rm -rf dist && vp pack --filter main-extension-main-world --filter main-extension-content-script --watch",
     "check": "vp check --fix",
-    "clean": "rm -rf dist e2e/dist template/dist",
-    "format": "vp fmt --write",
-    "lint": "vp lint --fix",
-    "prepublishOnly": "node ../../scripts/validate-publish.js && pnpm run build",
-    "publish:dry": "pnpm publish --access public --dry-run",
-    "publish:npm": "pnpm publish --access public",
-    "test:e2e": "pnpm --filter @mcp-b/webmcp-extension... run build && node e2e/build-template.mjs && vp pack --filter e2e-content-script && node --experimental-strip-types --test e2e/extension-runtime.e2e.test.ts",
+    "clean": "rm -rf dist e2e-extension/dist",
+    "format": "eslint . --fix",
+    "lint": "eslint .",
+    "test": "vitest run",
+    "test:e2e": "vp pack --filter e2e-extension-main-world --filter e2e-extension-content-script && node --experimental-strip-types --test e2e-extension/extension-runtime.e2e.test.ts",
     "typecheck": "tsc -p tsconfig.check.json --noEmit"
   },
   "dependencies": {
-    "@mcp-b/transports": "workspace:*",
+    "@mcp-b/global": "catalog:",
+    "@mcp-b/transports": "catalog:",
     "@modelcontextprotocol/client": "catalog:"
   },
   "devDependencies": {
-    "@mcp-b/global": "workspace:*",
+    "@mcp-b/webmcp-types": "catalog:",
     "@types/node": "catalog:",
+    "eslint": "catalog:",
+    "jsdom": "^25.0.0",
     "playwright": "catalog:",
     "typescript": "catalog:",
-    "vite-plus": "catalog:"
+    "vite": "^8.2.2",
+    "vite-plus": "catalog:",
+    "vitest": "catalog:"
   },
   "engines": {
     "node": ">=20"

@@ -75,4 +75,37 @@ packages/
 └── html-app/
 ```
 
+### 5.1 依赖来源与版本管理
+
+| 依赖类别 | 来源 | 说明 |
+| -------- | ---- | ---- |
+| `@mcp-b/*`（`webmcp-polyfill`、`transports`、`global`、`webmcp-types`） | **npm registry** | 按项目规则「优先复用上游包」，直接消费已发布的正式包 |
+| `@modelcontextprotocol/client` | npm registry | MCP 客户端 SDK |
+| `vite-plus` | npm registry（固定 `0.1.24`） | `chrome-extension` 的构建工具，提供 `vp pack` 与 `vite-plus/pack` |
+| `vite` / `vitest` | npm registry | `html-app` 构建与单元测试 |
+| `eslint` / `typescript` | npm registry | 根工程统一的校验工具链 |
+
+要点：
+
+- 两个包均**不使用 `workspace:*`** 指向 `git-source/npm-packages`——子模块是只读参考，按规则不作运行时依赖。
+- 共享版本统一在 `pnpm-workspace.yaml` 的 `catalog` 中声明，包内用 `catalog:` 引用，避免版本漂移。
+- `chrome-extension` 保留 `vite-plus` 构建（与上游一致），`html-app` 使用标准 `vite`，两者互不冲突。
+
+### 5.2 验证体系
+
+根目录统一暴露命令，逐级校验：
+
+| 命令 | 作用 | 覆盖范围 |
+| ---- | ---- | -------- |
+| `pnpm build` | 构建全部包 | `vp pack`（插件产物 + d.ts）、`tsc && vite build`（SPA 产物） |
+| `pnpm typecheck` | 全量类型检查 | 各包 `tsc --noEmit`；插件侧含 `src` / `e2e` / `template` / `vite.config.ts` |
+| `pnpm lint` | 代码检查 | 根扁平配置 `eslint.config.mjs`，覆盖全部 `.ts` / `.mjs` |
+| `pnpm test` | 单元测试 | `vitest run`，仅覆盖纯逻辑（目录 `src`） |
+| `pnpm --filter chrome-extension test:e2e` | 端到端测试 | node test runner + Playwright，需已构建扩展与浏览器 |
+
+设计约束：
+
+- 单元测试只跑 `src` 下的纯逻辑；`e2e` 依赖真实 Chrome 与已构建扩展，通过 `vitest.config.ts` 的 `include` 排除在默认测试之外，避免 `pnpm test` 被重资源用例拖垮。
+- `lint` 统一使用 ESLint（而非 `vp lint`），保证两个包规则一致。
+
 常用命令见 [getting-started.md](getting-started.md)，AI 工作指引见 [AGENT.md](../AGENT.md)。
