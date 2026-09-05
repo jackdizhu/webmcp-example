@@ -40,9 +40,11 @@ webmcp-example/
 │   ├── getting-started.md   # 环境准备与快速开始
 │   └── webmcp.md            # WebMCP 概念参考
 ├── rules/                   # 工程规则
-│   ├── README.md            # 规则索引
+│   ├── README.md            # 规则索引（适用范围与优先级）
 │   ├── language-rules.md    # 语言与编码规范
-│   └── project-rules.md     # 项目级规则
+│   ├── project-rules.md     # 项目级规则（技术栈/模块职责/服务管理）
+│   ├── design_rules.md      # 设计规范（多方案比选/多维评估/确认流程/变更分级）
+│   └── issues_rules.md      # 个人信息与敏感信息脱敏规则
 └── packages/                # 各模块包（pnpm workspace 成员）
     ├── chrome-extension/    # 浏览器插件端（agent 能力层）
     └── html-app/            # Web 应用单页面端（agent 工具层）
@@ -91,9 +93,21 @@ webmcp-example/
 - 分层：功能按模块拆分文件，单文件不超过 800 行。
 - 提交格式：`<type>(<scope>): <subject>`，scope 可为 `chrome-extension` / `html-app` / `docs` / `rules` / `root` / `*`。
 
+## 工程规范
+
+本工程的自定义规则沉淀在 `rules/` 目录，AI 代理与开发者在开发前必须阅读。规则优先级：**工程级规则（rules/） < 仓库级规则（AGENT.md） < 用户/工作区规则**，冲突时以上位规则为准。按需阅读对应规则，详情以各规则文件为准：
+
+| 规则文件 | 阅读场景 |
+|----------|----------|
+| [rules/README.md](rules/README.md) | 了解规则列表、适用范围与优先级（总览索引） |
+| [rules/language-rules.md](rules/language-rules.md) | 编写任何源代码、文档与注释时：输出语言、编码、命名与注释结构 |
+| [rules/project-rules.md](rules/project-rules.md) | 全工程开发前：技术栈、模块职责、服务管理、文件大小、提交规范 |
+| [rules/design_rules.md](rules/design_rules.md) | 设计类任务（模块架构、跨层契约、工具 schema、配置 Schema、性能优化等）：多方案比选、确认流程、变更分级 |
+| [rules/issues_rules.md](rules/issues_rules.md) | 全部对外输出（对话回复、代码注释、日志、文档、终端输出）：个人信息与敏感信息脱敏 |
+
 ## 开发流程
 
 1. 阅读 [docs/getting-started.md](docs/getting-started.md) 完成环境准备。
 2. 依赖本地或 `git-source/` 的 WebMCP 包，参考 `docs/webmcp.md` 理解 API。
-3. 遵循 `rules/project-rules.md` 与 `rules/language-rules.md` 进行开发。
+3. 按任务类型阅读 [工程规范](#工程规范) 表格中对应的规则文件，并遵循其要求进行开发。
 4. 提交前通过：`pnpm build && pnpm typecheck && pnpm lint`。

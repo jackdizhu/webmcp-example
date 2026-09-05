@@ -23,4 +23,4 @@
 
 | 文件 | 问题描述 | 状态 |
 |---|---|---|
-| （暂无） | | |
+| `001-vue-runtime-template-csp-eval.md` | 侧边栏白屏：Vue 运行时模板编译触发 MV3 CSP EvalError | ✅ 已解决 |

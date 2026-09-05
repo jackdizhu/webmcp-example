@@ -51,8 +51,19 @@
 - 提交格式：`<type>(<scope>): <subject>`。
 - scope：`chrome-extension`、`html-app`、`docs`、`rules`、`root`、`*`。
 
+## 8. MV3 扩展页 CSP 约束（ chrome-extension 专属）
+
+> 根因案例见 `issues/001-vue-runtime-template-csp-eval.md`（侧边栏白屏）。
+
+- MV3 扩展页（Side Panel / popup / options / background）强制 CSP `script-src 'self'`，**不允许 `unsafe-eval`，且 manifest 无法放开**。
+- **禁止**在扩展页代码中出现任何运行时求值：`eval`、`new Function`、Vue/框架的运行时字符串模板编译。
+- Vue 组件在扩展页中**必须使用 `h()` 渲染函数**（构建期生成，零 eval）；`vue` 一律使用默认 runtime 构建，**禁止** alias 到 `vue/dist/vue.esm-bundler.js`（含编译器全量构建）。
+- Vue 特性旗标（`__VUE_OPTIONS_API__` 等）必须通过构建 `define` 显式声明，缺失会残留未定义全局标识符（IIFE 产物下 ReferenceError）。
+- 引入新的 UI 框架或模板类库前，先验证其运行机制不含 eval 类调用，否则按上一条同样处理（改渲染函数或换构建期预编译方案）。
+
 ## 版本历史
 
 | 版本 | 日期 | 变更内容 |
 | ---- | ---- | -------- |
+| 1.1.0 | 2026-09-05 | 新增第 8 节：MV3 扩展页 CSP 约束（禁止运行时求值，Vue 用渲染函数） |
 | 1.0.0 | 2026-09-05 | 初始版本：技术栈、模块职责、服务管理、开发规范 |

@@ -1,4 +1,5 @@
 import { connectWebMCPClient } from '../core/content-script';
+import { startPageToolsBridge } from '../core/page-tools-bridge';
 
 async function waitForDocument(): Promise<void> {
   if (document.readyState !== 'loading') return;
@@ -38,6 +39,10 @@ async function main(): Promise<void> {
     '[WebMCP] Page tools:',
     tools.map(({ name }) => name)
   );
+
+  // 向扩展内其他上下文（侧边栏聊天框）暴露页面工具的代理桥接。
+  // 桥接生命周期与 content script 一致：文档销毁时随上下文一并回收，无需手动停止。
+  startPageToolsBridge(client);
 }
 
 void main().catch((error) => {

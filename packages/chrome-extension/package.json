@@ -12,21 +12,22 @@
   },
   "type": "module",
   "scripts": {
-    "build": "rm -rf dist && vp pack --filter main-extension-main-world --filter main-extension-content-script",
-    "build:e2e": "rm -rf e2e-extension/dist && vp pack --filter e2e-extension-main-world --filter e2e-extension-content-script",
-    "dev": "rm -rf dist && vp pack --filter main-extension-main-world --filter main-extension-content-script --watch",
+    "build": "rm -rf dist && vp pack --filter main-extension-main-world --filter main-extension-content-script --filter main-extension-side-panel --filter main-extension-service-worker",
+    "build:e2e": "rm -rf e2e-extension/dist && vp pack --filter e2e-extension-main-world --filter e2e-extension-content-script --filter e2e-extension-side-panel --filter e2e-extension-service-worker",
+    "dev": "rm -rf dist && vp pack --filter main-extension-main-world --filter main-extension-content-script --filter main-extension-side-panel --filter main-extension-service-worker --watch",
     "check": "vp check --fix",
     "clean": "rm -rf dist e2e-extension/dist",
     "format": "eslint . --fix",
     "lint": "eslint .",
     "test": "vitest run",
-    "test:e2e": "vp pack --filter e2e-extension-main-world --filter e2e-extension-content-script && node --experimental-strip-types --test e2e-extension/extension-runtime.e2e.test.ts",
+    "test:e2e": "vp pack --filter e2e-extension-main-world --filter e2e-extension-content-script --filter e2e-extension-side-panel --filter e2e-extension-service-worker && node --experimental-strip-types --test e2e-extension/extension-runtime.e2e.test.ts",
     "typecheck": "tsc -p tsconfig.check.json --noEmit"
   },
   "dependencies": {
     "@mcp-b/global": "catalog:",
     "@mcp-b/transports": "catalog:",
-    "@modelcontextprotocol/client": "catalog:"
+    "@modelcontextprotocol/client": "catalog:",
+    "vue": "catalog:"
   },
   "devDependencies": {
     "@mcp-b/webmcp-types": "catalog:",
