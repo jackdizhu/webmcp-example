@@ -1,14 +1,14 @@
 {
-  "name": "@mcp-b/webmcp-extension",
-  "version": "5.1.0",
+  "name": "webmcp-chrome-extension",
+  "version": "1.1.0",
   "description": "Chromium 扩展：在页面注入 WebMCP，并从隔离世界发现、调用页面暴露的工具",
   "private": true,
   "license": "MIT",
-  "author": "Alex Nahas",
+  "author": "jackdizhu",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/WebMCP-org/npm-packages.git",
-    "directory": "packages/webmcp-extension"
+    "url": "git+https://github.com/jackdizhu/webmcp-example.git",
+    "directory": "packages/webmcp-chrome-extension"
   },
   "type": "module",
   "scripts": {

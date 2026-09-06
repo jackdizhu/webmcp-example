@@ -11,8 +11,14 @@
     "stdio",
     "webmcp"
   ],
+  "private": true,
   "license": "MIT",
-  "author": "Alex Nahas",
+  "author": "jackdizhu",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/jackdizhu/webmcp-example.git",
+    "directory": "packages/webmcp-extension-relay"
+  },
   "bin": {
     "webmcp-extension-relay": "./dist/cli.mjs"
   },
