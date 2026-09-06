@@ -1,0 +1,1423 @@
+import { randomUUID } from 'node:crypto';
+import { EventEmitter } from 'node:events';
+
+import WebSocket, { WebSocketServer } from 'ws';
+import {
+  buildPortCandidates,
+  DEFAULT_RELAY_PORT,
+  DEFAULT_RELAY_PORT_RANGE_END,
+  defaultRelayPortPersistPath,
+  persistPort,
+} from './portStrategy.js';
+import {
+  CallToolResultSchema,
+  type RelayCallToolResult,
+  type RelayInvokeArgs,
+  type RelayTool,
+} from './protocol.js';
+import { RelayRegistry } from './registry.js';
+import {
+  type BrowserToRelayMessage,
+  BrowserToRelayMessageSchema,
+  type RelayClientToServerMessage,
+  RelayClientToServerMessageSchema,
+  type RelayServerToClientMessage,
+  RelayServerToClientMessageSchema,
+  type RelayHelloAcceptedMessage,
+  type RelayHelloRejectedMessage,
+  type RelaySourceInfo,
+  type RelayToBrowserMessage,
+  type ServerHelloMessage,
+} from './schemas.js';
+
+const RELAY_BROWSER_PROTOCOL = 'webmcp.v1';
+const RELAY_DISCOVERY_PROTOCOL = 'webmcp-discovery.v1';
+const RELAY_INTERNAL_PROTOCOL = 'webmcp-relay.v1';
+const RELAY_SERVER_MESSAGE_TIMEOUT_MS = 750;
+const HEARTBEAT_INTERVAL_MS = 15_000;
+const HEARTBEAT_DEAD_THRESHOLD_MS = 25_000;
+const SUPPORTED_SUBPROTOCOLS = new Set([
+  RELAY_BROWSER_PROTOCOL,
+  RELAY_DISCOVERY_PROTOCOL,
+  RELAY_INTERNAL_PROTOCOL,
+]);
+
+/**
+ * In-flight relay invocation waiting for a browser `result` message.
+ */
+interface PendingInvocation {
+  connectionId: string;
+  timeoutId: ReturnType<typeof setTimeout>;
+  resolve: (result: RelayCallToolResult) => void;
+  reject: (error: Error) => void;
+}
+
+function formatPayloadLimit(bytes: number): string {
+  if (bytes >= 1_000_000 && bytes % 1_000_000 === 0) {
+    return `${String(bytes / 1_000_000)}MB`;
+  }
+  return `${String(bytes)} bytes`;
+}
+
+/**
+ * Runtime options for {@link RelayBridgeServer}.
+ */
+export interface RelayBridgeServerOptions {
+  /**
+   * Network interface used by the local WebSocket server.
+   * @defaultValue `"127.0.0.1"`
+   */
+  host?: string;
+  /**
+   * Preferred WebSocket port for browser widget connections.
+   * @defaultValue `9333`
+   */
+  port?: number;
+  /**
+   * Whether the preferred port came from an explicit CLI/API override.
+   * Explicit ports fail if occupied by a non-relay process.
+   * @defaultValue `false`
+   */
+  portExplicitlySet?: boolean;
+  /**
+   * Inclusive upper bound for automatic port discovery.
+   * @defaultValue `9348`
+   */
+  portRangeEnd?: number;
+  /**
+   * File path used to cache the last successful relay port.
+   * @defaultValue `~/.webmcp/relay-port.json`
+   */
+  persistPath?: string;
+  /**
+   * Allowed host page origins verified from browser WebSocket requests.
+   * Use `["*"]` to allow all origins.
+   *
+   * Defaults to extension-only access: with the embed iframe route removed,
+   * the expected browser client is the WebMCP Chrome extension, whose WebSocket
+   * Origin is `chrome-extension://<id>` (unpacked installs use a random id).
+   * `chrome-extension://*` matches any origin under that scheme; pass explicit
+   * `https://` origins to additionally trust specific host pages.
+   *
+   * @defaultValue `["chrome-extension://*"]`
+   */
+  allowedOrigins?: string[];
+  /**
+   * Maximum WebSocket payload size in bytes.
+   * @defaultValue `10000000`
+   */
+  maxPayloadBytes?: number;
+  /**
+   * Timeout used for browser tool invocations.
+   * @defaultValue `65000`
+   */
+  invokeTimeoutMs?: number;
+  /**
+   * Human-readable relay label reported in discovery handshakes.
+   */
+  label?: string;
+  /**
+   * Optional workspace name reported in discovery handshakes.
+   */
+  workspace?: string;
+  /**
+   * Stable relay identifier used to select between multiple relays.
+   */
+  relayId?: string;
+}
+
+/**
+ * WebSocket relay between browser clients (WebMCP Chrome extension) and MCP server calls.
+ *
+ * Operates in two modes:
+ * - **server** (default): Runs a WebSocket server, accepts browser and relay
+ *   client connections.
+ * - **client** (fallback on EADDRINUSE): Connects as a WebSocket client to an
+ *   existing server relay and proxies tool operations through it.
+ */
+export class RelayBridgeServer extends EventEmitter {
+  /**
+   * Registry for connected sources and aggregated tool definitions.
+   * Only actively used in server mode; remains empty when operating as a client.
+   */
+  readonly registry: RelayRegistry;
+
+  private readonly host: string;
+  private readonly preferredPort: number;
+  private desiredPort: number;
+  private readonly portExplicitlySet: boolean;
+  private readonly portRangeEnd: number;
+  private readonly persistPath: string;
+  private readonly allowedOrigins: string[];
+  private readonly maxPayloadBytes: number;
+  private readonly invokeTimeoutMs: number;
+  private readonly label: string | undefined;
+  private readonly workspace: string | undefined;
+  private readonly relayId: string | undefined;
+  private readonly instanceId: string;
+
+  private wss: WebSocketServer | null = null;
+  private readonly socketByConnectionId = new Map<string, WebSocket>();
+  private readonly requestOriginByConnectionId = new Map<string, string>();
+  private readonly pendingInvocations = new Map<string, PendingInvocation>();
+  private readonly browserClientConnectionIds = new Set<string>();
+  private readonly relayClientConnectionIds = new Set<string>();
+  private readonly heartbeatIntervalByConnectionId = new Map<
+    string,
+    ReturnType<typeof setInterval>
+  >();
+  private readonly lastPongByConnectionId = new Map<string, number>();
+  private readonly onStateChangedPushRelay = () => {
+    this.pushToolsToRelayClients();
+  };
+
+  private _mode: 'server' | 'client' = 'server';
+  private clientSocket: WebSocket | null = null;
+  private clientReconnectTimer: ReturnType<typeof setTimeout> | null = null;
+  private clientReconnectDelay = 500;
+  /**
+   * Maximum delay for relay-to-relay reconnection backoff in client mode.
+   */
+  private readonly clientMaxReconnectDelay = 3_000;
+  private readonly clientMaxReconnectAttempts = 100;
+  private clientReconnectAttempts = 0;
+  private readonly clientPendingInvocations = new Map<string, PendingInvocation>();
+  private clientTools: RelayTool[] = [];
+  private clientSources: RelaySourceInfo[] = [];
+  private clientToolSourceMap: Record<string, string[]> = {};
+  private stopping = false;
+
+  /**
+   * Creates a relay bridge server instance.
+   */
+  constructor(options: RelayBridgeServerOptions = {}, registry?: RelayRegistry) {
+    super();
+    this.registry = registry ?? new RelayRegistry();
+
+    this.host = options.host ?? '127.0.0.1';
+    this.preferredPort = options.port ?? DEFAULT_RELAY_PORT;
+    this.desiredPort = this.preferredPort;
+    this.portExplicitlySet = options.portExplicitlySet ?? false;
+    this.portRangeEnd =
+      options.portRangeEnd ?? Math.max(DEFAULT_RELAY_PORT_RANGE_END, this.preferredPort);
+    this.persistPath = options.persistPath ?? defaultRelayPortPersistPath();
+    this.allowedOrigins = options.allowedOrigins ?? ['chrome-extension://*'];
+    // 10MB default: large enough for typical JSON API responses while
+    // still protecting the relay process from unbounded memory growth.
+    this.maxPayloadBytes = options.maxPayloadBytes ?? 10_000_000;
+    this.invokeTimeoutMs = options.invokeTimeoutMs ?? 65_000;
+    this.label = options.label;
+    this.workspace = options.workspace;
+    this.relayId = options.relayId;
+    this.instanceId = randomUUID();
+
+    if (
+      !Number.isInteger(this.preferredPort) ||
+      this.preferredPort < 0 ||
+      this.preferredPort > 65535
+    ) {
+      throw new Error(
+        `Invalid port ${this.preferredPort}. Port must be 0 (auto-assign) or between 1 and 65535.`
+      );
+    }
+    if (
+      !Number.isInteger(this.portRangeEnd) ||
+      this.portRangeEnd < 1 ||
+      this.portRangeEnd > 65535 ||
+      (this.portRangeEnd < this.preferredPort && this.preferredPort !== 0)
+    ) {
+      throw new Error(
+        `Invalid port range ${this.preferredPort}-${this.portRangeEnd}. rangeEnd must be an integer between the preferred port and 65535.`
+      );
+    }
+    if (!Number.isInteger(this.maxPayloadBytes) || this.maxPayloadBytes <= 0) {
+      throw new Error(
+        `Invalid maxPayloadBytes ${this.maxPayloadBytes}. Must be a positive integer.`
+      );
+    }
+    if (!Number.isInteger(this.invokeTimeoutMs) || this.invokeTimeoutMs <= 0) {
+      throw new Error(
+        `Invalid invokeTimeoutMs ${this.invokeTimeoutMs}. Must be a positive integer.`
+      );
+    }
+  }
+
+  /**
+   * Current operating mode.
+   */
+  get mode(): 'server' | 'client' {
+    return this._mode;
+  }
+
+  /**
+   * Resolved listening port. In client mode this is the port of the server
+   * relay being proxied through.
+   */
+  get port(): number {
+    return this.desiredPort;
+  }
+
+  /**
+   * Tools received from the server relay (client mode only).
+   * Returns an empty array in server mode.
+   */
+  listToolsFromRelay(): RelayTool[] {
+    return this._mode === 'client' ? [...this.clientTools] : [];
+  }
+
+  /**
+   * Source metadata received from the server relay (client mode only).
+   * Returns an empty array in server mode.
+   */
+  listSourcesFromRelay(): RelaySourceInfo[] {
+    return this._mode === 'client' ? [...this.clientSources] : [];
+  }
+
+  /**
+   * Tool-to-source mapping received from the server relay (client mode only).
+   * Maps public tool names to arrays of source IDs.
+   * Returns an empty record in server mode.
+   */
+  getToolSourceMapFromRelay(): Record<string, string[]> {
+    return this._mode === 'client' ? { ...this.clientToolSourceMap } : {};
+  }
+
+  /**
+   * Starts the bridge. Attempts to bind a WebSocket server (server mode).
+   * If a compatible relay already owns a candidate port, joins it in client mode.
+   * If a non-relay process owns the port, continues searching the reserved range.
+   */
+  async start(): Promise<void> {
+    if (this.wss || this.clientSocket) {
+      return;
+    }
+
+    this.stopping = false;
+    await this.startUsingPortStrategy();
+  }
+
+  private async startUsingPortStrategy(): Promise<void> {
+    if (this.preferredPort === 0) {
+      await this.startAsServer(0);
+      return;
+    }
+
+    const candidates = await buildPortCandidates({
+      defaultPort: this.preferredPort,
+      ...(this.portExplicitlySet ? { fixedPort: this.preferredPort } : {}),
+      host: this.host,
+      persistPath: this.persistPath,
+      rangeEnd: this.portRangeEnd,
+    });
+
+    for (const candidate of candidates) {
+      try {
+        await this.startAsServer(candidate.port);
+        await this.persistSelectedPort();
+        return;
+      } catch (err) {
+        if (!this.isAddressInUseError(err)) {
+          throw err;
+        }
+
+        const attached = await this.tryAttachToExistingRelay(candidate.port);
+        if (attached) {
+          await this.persistSelectedPort();
+          return;
+        }
+
+        if (candidate.wasFixed) {
+          throw new Error(
+            `Port ${candidate.port} is already in use by a non-WebMCP service and cannot be shared.`
+          );
+        }
+
+        process.stderr.write(
+          `[webmcp-extension-relay] info: port ${candidate.port} is occupied by a non-relay service, trying next port\n`
+        );
+      }
+    }
+
+    throw new Error(
+      `No compatible relay port was available in the range ${this.preferredPort}-${this.portRangeEnd}.`
+    );
+  }
+
+  private isAddressInUseError(error: unknown): boolean {
+    return (
+      error instanceof Error &&
+      ('code' in error ? error.code === 'EADDRINUSE' : error.message.includes('EADDRINUSE'))
+    );
+  }
+
+  private async persistSelectedPort(): Promise<void> {
+    try {
+      await persistPort(this.port, this.persistPath, this.host);
+    } catch (error) {
+      process.stderr.write(
+        `[webmcp-extension-relay] warn: could not cache relay port: ${error instanceof Error ? error.message : String(error)}\n`
+      );
+    }
+  }
+
+  private async tryAttachToExistingRelay(port: number): Promise<boolean> {
+    try {
+      await this.startAsClient(port);
+      process.stderr.write(
+        `[webmcp-extension-relay] info: discovered compatible relay on port ${port}, switching to client mode\n`
+      );
+      return true;
+    } catch (error) {
+      // The caller reports every false here as "occupied by a non-relay service". A slow
+      // but healthy relay hits the 750ms hello timeout and lands here too, so name the
+      // real reason rather than leaving the operator with a wrong hypothesis.
+      process.stderr.write(
+        `[webmcp-extension-relay] info: port ${port} did not complete a relay handshake: ${error instanceof Error ? error.message : String(error)}\n`
+      );
+      return false;
+    }
+  }
+
+  /**
+   * Stops all relay resources and rejects any pending invocations.
+   */
+  async stop(): Promise<void> {
+    this.stopping = true;
+
+    if (this.clientReconnectTimer) {
+      clearTimeout(this.clientReconnectTimer);
+      this.clientReconnectTimer = null;
+    }
+
+    if (this._mode === 'client') {
+      for (const pending of this.clientPendingInvocations.values()) {
+        clearTimeout(pending.timeoutId);
+        pending.reject(new Error('Relay client stopped'));
+      }
+      this.clientPendingInvocations.clear();
+      this.clientTools = [];
+      this.clientSources = [];
+      this.clientToolSourceMap = {};
+
+      if (this.clientSocket) {
+        try {
+          this.clientSocket.close(1000, 'Relay client shutting down');
+        } catch (err) {
+          process.stderr.write(
+            `[webmcp-extension-relay] warn: error closing client socket during shutdown: ${err instanceof Error ? err.message : String(err)}\n`
+          );
+        }
+        this.clientSocket = null;
+      }
+      return;
+    }
+
+    this.off('stateChanged', this.onStateChangedPushRelay);
+
+    for (const [connectionId, socket] of this.socketByConnectionId) {
+      this.registry.removeConnection(connectionId);
+      try {
+        socket.close(1001, 'Relay shutting down');
+      } catch (err) {
+        process.stderr.write(
+          `[webmcp-extension-relay] warn: error closing socket during shutdown: ${err instanceof Error ? err.message : String(err)}\n`
+        );
+      }
+    }
+
+    for (const intervalId of this.heartbeatIntervalByConnectionId.values()) {
+      clearInterval(intervalId);
+    }
+    this.heartbeatIntervalByConnectionId.clear();
+    this.lastPongByConnectionId.clear();
+
+    this.socketByConnectionId.clear();
+    this.requestOriginByConnectionId.clear();
+    this.browserClientConnectionIds.clear();
+    this.relayClientConnectionIds.clear();
+
+    for (const pending of this.pendingInvocations.values()) {
+      clearTimeout(pending.timeoutId);
+      pending.reject(new Error('Relay server stopped before tool invocation completed'));
+    }
+    this.pendingInvocations.clear();
+
+    const wss = this.wss;
+    this.wss = null;
+
+    if (!wss) {
+      return;
+    }
+
+    await new Promise<void>((resolve) => {
+      wss.close((err?: Error) => {
+        if (err) {
+          process.stderr.write(
+            `[webmcp-extension-relay] warn: WebSocket server close error: ${err.message}\n`
+          );
+        }
+        resolve();
+      });
+    });
+  }
+
+  /**
+   * Sends a reload message to a connected browser source.
+   * Only supported in server mode.
+   */
+  reloadSource(connectionId: string): void {
+    if (this._mode !== 'server') {
+      throw new Error('reloadSource is only supported in server mode');
+    }
+    const socket = this.socketByConnectionId.get(connectionId);
+    if (!socket || socket.readyState !== WebSocket.OPEN) {
+      throw new Error(`Source ${connectionId} is not connected`);
+    }
+    const message: RelayToBrowserMessage = { type: 'reload' };
+    try {
+      socket.send(JSON.stringify(message));
+    } catch (err) {
+      throw new Error(`Failed to send reload: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
+
+  /**
+   * Invokes a tool either locally (server mode) or through the upstream relay
+   * (client mode).
+   */
+  async invokeTool(
+    toolName: string,
+    args: RelayInvokeArgs,
+    options: {
+      sourceId?: string;
+      requestTabId?: string;
+    } = {}
+  ): Promise<RelayCallToolResult> {
+    if (this._mode === 'client') {
+      return this.invokeToolViaRelay(toolName, args);
+    }
+
+    return this.invokeToolLocally(toolName, args, options);
+  }
+
+  private async startAsServer(port = this.desiredPort): Promise<void> {
+    const wss = await new Promise<WebSocketServer>((resolve, reject) => {
+      const server = new WebSocketServer({
+        handleProtocols: (protocols) => {
+          for (const protocol of protocols) {
+            if (SUPPORTED_SUBPROTOCOLS.has(protocol)) {
+              return protocol;
+            }
+          }
+          return false;
+        },
+        host: this.host,
+        port,
+        maxPayload: this.maxPayloadBytes,
+      });
+
+      const onListening = () => {
+        server.off('error', onError);
+        resolve(server);
+      };
+      const onError = (err: Error) => {
+        server.off('listening', onListening);
+        reject(err);
+      };
+
+      server.once('listening', onListening);
+      server.once('error', onError);
+    });
+
+    wss.on('connection', (socket: WebSocket, request) => {
+      const requestOrigin = request.headers.origin;
+      if (requestOrigin && socket.protocol === RELAY_INTERNAL_PROTOCOL) {
+        socket.close(1008, 'Browser connections cannot use the relay protocol');
+        return;
+      }
+
+      const connectionId = randomUUID();
+      this.socketByConnectionId.set(connectionId, socket);
+      if (requestOrigin) {
+        this.requestOriginByConnectionId.set(connectionId, requestOrigin);
+      }
+
+      socket.on('message', (raw: WebSocket.RawData) => {
+        this.onSocketMessage(connectionId, raw);
+      });
+
+      socket.on('close', (code: number) => {
+        this.onSocketClose(connectionId, code);
+      });
+
+      socket.on('error', (err: Error) => {
+        process.stderr.write(
+          `[webmcp-extension-relay] warn: socket error for connection ${connectionId}: ${err.message}\n`
+        );
+        const code =
+          'code' in err && err.code === 'WS_ERR_UNSUPPORTED_MESSAGE_LENGTH' ? 1009 : undefined;
+        this.onSocketClose(connectionId, code);
+      });
+
+      try {
+        socket.send(JSON.stringify(this.buildServerHello()));
+      } catch (err) {
+        process.stderr.write(
+          `[webmcp-extension-relay] warn: failed to send server hello to connection ${connectionId}: ${err instanceof Error ? err.message : String(err)}\n`
+        );
+        socket.close(1011, 'Failed to send server hello');
+        return;
+      }
+
+      this.startHeartbeat(connectionId);
+    });
+
+    wss.on('error', (err: Error) => {
+      // Logged, not re-emitted: nothing listens for 'error' on this EventEmitter, and
+      // emit('error') without a listener rethrows, killing the relay via uncaughtException.
+      process.stderr.write(`[webmcp-extension-relay] error: WebSocket server error: ${err.message}\n`);
+    });
+
+    this.wss = wss;
+    this._mode = 'server';
+
+    const address = wss.address();
+    if (address && typeof address !== 'string') {
+      this.desiredPort = address.port;
+    }
+
+    this.on('stateChanged', this.onStateChangedPushRelay);
+  }
+
+  private buildServerHello(): ServerHelloMessage {
+    return {
+      type: 'server-hello',
+      service: 'webmcp-extension-relay',
+      version: 1,
+      host: this.host,
+      instanceId: this.instanceId,
+      label: this.label,
+      port: this.desiredPort,
+      relayId: this.relayId ?? this.instanceId,
+      workspace: this.workspace,
+    };
+  }
+
+  /**
+   * `async` is load-bearing: {@link onRelayClientMessage} consumes this through
+   * `.then(onResult, onError)`, so a synchronous throw would escape the socket
+   * message handler as an uncaught exception and leave the relay client waiting
+   * for a `relay/result` that never arrives.
+   */
+  private async invokeToolLocally(
+    toolName: string,
+    args: RelayInvokeArgs,
+    options: { sourceId?: string; requestTabId?: string }
+  ): Promise<RelayCallToolResult> {
+    const resolved = this.registry.resolveInvocation({
+      toolName,
+      ...(options.sourceId === undefined ? {} : { sourceId: options.sourceId }),
+      ...(options.requestTabId === undefined ? {} : { requestTabId: options.requestTabId }),
+    });
+
+    if (!resolved) {
+      throw new Error(`No active browser source provides tool "${toolName}"`);
+    }
+
+    const socket = this.socketByConnectionId.get(resolved.connectionId);
+    if (!socket || socket.readyState !== WebSocket.OPEN) {
+      throw new Error(
+        `Tool source ${resolved.connectionId} disconnected before invocation of "${toolName}"`
+      );
+    }
+
+    const callId = randomUUID();
+
+    return new Promise<RelayCallToolResult>((resolve, reject) => {
+      const timeoutId = setTimeout(() => {
+        this.pendingInvocations.delete(callId);
+        reject(
+          new Error(`Invocation for tool "${toolName}" timed out after ${this.invokeTimeoutMs}ms`)
+        );
+      }, this.invokeTimeoutMs);
+
+      this.pendingInvocations.set(callId, {
+        connectionId: resolved.connectionId,
+        timeoutId,
+        resolve,
+        reject,
+      });
+
+      const message: RelayToBrowserMessage = {
+        type: 'invoke',
+        callId,
+        toolName: resolved.tool.name,
+        args,
+      };
+
+      try {
+        socket.send(JSON.stringify(message));
+      } catch (err) {
+        clearTimeout(timeoutId);
+        this.pendingInvocations.delete(callId);
+        reject(
+          new Error(
+            `Failed to send invocation for tool "${toolName}": ${err instanceof Error ? err.message : err}`
+          )
+        );
+      }
+    });
+  }
+
+  /** Handles a raw message according to the negotiated WebSocket protocol. */
+  private onSocketMessage(connectionId: string, raw: WebSocket.RawData): void {
+    const text = this.rawDataToUtf8(raw);
+
+    let parsedJson: unknown;
+    try {
+      parsedJson = JSON.parse(text);
+    } catch (err) {
+      const preview = text.length > 200 ? `${text.slice(0, 200)}...` : text;
+      process.stderr.write(
+        `[webmcp-extension-relay] warn: invalid JSON from connection ${connectionId} (${err instanceof Error ? err.message : 'parse error'}): ${preview}\n`
+      );
+      return;
+    }
+
+    const typeField =
+      typeof parsedJson === 'object' && parsedJson !== null && 'type' in parsedJson
+        ? parsedJson.type
+        : undefined;
+    const socket = this.socketByConnectionId.get(connectionId);
+    if (!socket) {
+      return;
+    }
+
+    if (socket.protocol === RELAY_INTERNAL_PROTOCOL) {
+      const relayMsg = RelayClientToServerMessageSchema.safeParse(parsedJson);
+      if (relayMsg.success) {
+        this.onRelayClientMessage(connectionId, relayMsg.data);
+      } else {
+        process.stderr.write(
+          `[webmcp-extension-relay] warn: invalid relay message from ${connectionId}: ${relayMsg.error.message}\n`
+        );
+      }
+      return;
+    }
+
+    if (typeof typeField === 'string' && typeField.startsWith('relay/')) {
+      process.stderr.write(
+        `[webmcp-extension-relay] warn: connection ${connectionId} used the relay protocol without negotiating it\n`
+      );
+      socket.close(1008, 'Relay protocol was not negotiated');
+      return;
+    }
+
+    const parsedMessage = BrowserToRelayMessageSchema.safeParse(parsedJson);
+    if (!parsedMessage.success) {
+      process.stderr.write(
+        `[webmcp-extension-relay] warn: invalid message from connection ${connectionId} (type=${typeField}): ${parsedMessage.error.message}\n`
+      );
+      return;
+    }
+
+    this.registry.touchConnection(connectionId);
+    this.onBrowserClientMessage(connectionId, parsedMessage.data);
+  }
+
+  private onBrowserClientMessage(connectionId: string, message: BrowserToRelayMessage): void {
+    if (message.type !== 'hello' && !this.browserClientConnectionIds.has(connectionId)) {
+      process.stderr.write(
+        `[webmcp-extension-relay] warn: connection ${connectionId} sent ${message.type} before hello, ignoring\n`
+      );
+      return;
+    }
+
+    switch (message.type) {
+      case 'hello':
+        try {
+          const socket = this.socketByConnectionId.get(connectionId);
+          const origin = this.requestOriginByConnectionId.get(connectionId) ?? message.origin;
+          if (!this.isHostOriginAllowed(origin)) {
+            process.stderr.write(
+              `[webmcp-extension-relay] warn: rejecting source ${connectionId} with disallowed host origin: ${origin ?? 'missing'}\n`
+            );
+            if (socket) {
+              this.sendHelloRejected(
+                socket,
+                {
+                  type: 'hello/rejected',
+                  reason: 'host-origin-not-allowed',
+                  message: 'Host page origin is not allowed by this relay.',
+                },
+                1008,
+                'Host origin not allowed'
+              );
+            }
+            break;
+          }
+          this.registry.upsertSource(connectionId, { ...message, origin });
+          this.browserClientConnectionIds.add(connectionId);
+          if (socket) {
+            this.sendHelloAccepted(socket, { type: 'hello/accepted' });
+          }
+          this.emit('stateChanged');
+        } catch (err) {
+          process.stderr.write(
+            `[webmcp-extension-relay] error: failed to process hello from connection ${connectionId}: ${err instanceof Error ? (err.stack ?? err.message) : String(err)}\n`
+          );
+        }
+        break;
+
+      case 'tools/list':
+      case 'tools/changed':
+        try {
+          const previousCount = this.registry.toolCountOf(connectionId);
+          this.registry.registerTools(connectionId, message.tools);
+          const currentCount = this.registry.toolCountOf(connectionId);
+          // 对账日志：与扩展端 [webmcp-relay-source] 日志配合，定位工具清单同步断层
+          if (currentCount !== previousCount) {
+            process.stderr.write(
+              `[webmcp-extension-relay] source ${connectionId} tools ${String(previousCount)}→${String(currentCount)}\n`
+            );
+          }
+          this.emit('stateChanged');
+        } catch (err) {
+          process.stderr.write(
+            `[webmcp-extension-relay] error: failed to register tools for connection ${connectionId}: ${err instanceof Error ? (err.stack ?? err.message) : String(err)}\n`
+          );
+          this.socketByConnectionId.get(connectionId)?.close(1008, 'Invalid tool list');
+        }
+        break;
+
+      case 'result': {
+        const pending = this.pendingInvocations.get(message.callId);
+        if (!pending) {
+          process.stderr.write(
+            `[webmcp-extension-relay] warn: received result for unknown callId ${message.callId}\n`
+          );
+          break;
+        }
+        if (pending.connectionId !== connectionId) {
+          process.stderr.write(
+            `[webmcp-extension-relay] warn: connection ${connectionId} returned result for another source's callId ${message.callId}\n`
+          );
+          break;
+        }
+
+        clearTimeout(pending.timeoutId);
+        this.pendingInvocations.delete(message.callId);
+        pending.resolve(this.normalizeCallToolResult(message.result));
+        break;
+      }
+
+      case 'pong':
+        this.lastPongByConnectionId.set(connectionId, Date.now());
+        break;
+    }
+  }
+
+  /**
+   * Handles relay-protocol messages from relay client connections.
+   */
+  private onRelayClientMessage(connectionId: string, message: RelayClientToServerMessage): void {
+    if (message.type !== 'relay/hello' && !this.relayClientConnectionIds.has(connectionId)) {
+      process.stderr.write(
+        `[webmcp-extension-relay] warn: connection ${connectionId} sent ${message.type} before relay/hello, ignoring\n`
+      );
+      return;
+    }
+
+    switch (message.type) {
+      case 'relay/hello':
+        this.relayClientConnectionIds.add(connectionId);
+        break;
+
+      case 'relay/list-tools': {
+        const response = this.buildRelayToolsPayload('relay/tools');
+        const socket = this.socketByConnectionId.get(connectionId);
+        if (socket?.readyState === WebSocket.OPEN) {
+          try {
+            socket.send(JSON.stringify(response));
+          } catch (err) {
+            process.stderr.write(
+              `[webmcp-extension-relay] warn: failed to send relay tools response to ${connectionId}: ${err instanceof Error ? err.message : String(err)}\n`
+            );
+          }
+        }
+        break;
+      }
+
+      case 'relay/invoke': {
+        const { callId, toolName, args } = message;
+        void this.invokeToolLocally(toolName, args ?? {}, {}).then(
+          (result) => this.sendRelayResult(connectionId, callId, result),
+          (error: unknown) =>
+            this.sendRelayResult(connectionId, callId, {
+              content: [
+                {
+                  type: 'text',
+                  text: `Relay invocation failed: ${error instanceof Error ? error.message : String(error)}`,
+                },
+              ],
+              isError: true,
+            })
+        );
+        break;
+      }
+    }
+  }
+
+  private sendRelayResult(connectionId: string, callId: string, result: RelayCallToolResult): void {
+    const socket = this.socketByConnectionId.get(connectionId);
+    if (socket?.readyState !== WebSocket.OPEN) {
+      process.stderr.write(
+        `[webmcp-extension-relay] warn: relay client ${connectionId} disconnected before result for callId ${callId} could be delivered\n`
+      );
+      return;
+    }
+
+    try {
+      socket.send(JSON.stringify({ type: 'relay/result', callId, result }));
+    } catch (error) {
+      process.stderr.write(
+        `[webmcp-extension-relay] warn: failed to send relay result to ${connectionId}: ${error instanceof Error ? error.message : String(error)}\n`
+      );
+    }
+  }
+
+  /**
+   * Pushes current tool state to all connected relay clients.
+   */
+  private pushToolsToRelayClients(): void {
+    if (this.relayClientConnectionIds.size === 0) {
+      return;
+    }
+
+    const message = this.buildRelayToolsPayload('relay/tools-changed');
+    const payload = JSON.stringify(message);
+
+    for (const connectionId of this.relayClientConnectionIds) {
+      const socket = this.socketByConnectionId.get(connectionId);
+      if (socket?.readyState === WebSocket.OPEN) {
+        try {
+          socket.send(payload);
+        } catch (err) {
+          process.stderr.write(
+            `[webmcp-extension-relay] warn: failed to push tool update to relay client ${connectionId}: ${err instanceof Error ? err.message : String(err)}\n`
+          );
+        }
+      }
+    }
+  }
+
+  /**
+   * Handles source disconnection and rejects in-flight calls owned by that source.
+   *
+   * Guarded against double-call: both 'error' and 'close' events fire on
+   * socket failure, but cleanup (and the stateChanged emission) runs only once.
+   */
+  private onSocketClose(connectionId: string, code?: number): void {
+    // Guard against double invocation: ws fires both 'error' and 'close' for
+    // maxPayload violations. The second call is a no-op.
+    if (!this.socketByConnectionId.has(connectionId)) return;
+
+    this.stopHeartbeat(connectionId);
+    this.requestOriginByConnectionId.delete(connectionId);
+    this.browserClientConnectionIds.delete(connectionId);
+    this.relayClientConnectionIds.delete(connectionId);
+    this.registry.removeConnection(connectionId);
+    this.socketByConnectionId.delete(connectionId);
+    this.emit('stateChanged');
+
+    // WS close code 1009 = "Message Too Big": the browser sent a response
+    // that exceeded maxPayloadBytes. Surface a clear error instead of letting
+    // the invocation time out silently after invokeTimeoutMs.
+    const isPayloadExceeded = code === 1009;
+
+    for (const [callId, pending] of this.pendingInvocations.entries()) {
+      if (pending.connectionId !== connectionId) {
+        continue;
+      }
+
+      clearTimeout(pending.timeoutId);
+      this.pendingInvocations.delete(callId);
+
+      if (isPayloadExceeded) {
+        pending.reject(
+          new Error(
+            `Tool result exceeded maximum payload size (${formatPayloadLimit(this.maxPayloadBytes)}). Use --max-payload to increase the limit.`
+          )
+        );
+      } else {
+        pending.reject(new Error(`Tool source ${connectionId} disconnected during invocation`));
+      }
+    }
+  }
+
+  private startHeartbeat(connectionId: string): void {
+    this.lastPongByConnectionId.set(connectionId, Date.now());
+
+    const intervalId = setInterval(() => {
+      const socket = this.socketByConnectionId.get(connectionId);
+      if (!socket || socket.readyState !== WebSocket.OPEN) {
+        this.stopHeartbeat(connectionId);
+        return;
+      }
+
+      // Skip heartbeat for relay client connections; they have their own reconnect logic.
+      if (this.relayClientConnectionIds.has(connectionId)) {
+        return;
+      }
+
+      const lastPong = this.lastPongByConnectionId.get(connectionId) ?? 0;
+      if (Date.now() - lastPong > HEARTBEAT_DEAD_THRESHOLD_MS) {
+        process.stderr.write(
+          `[webmcp-extension-relay] warn: connection ${connectionId} missed heartbeat, closing\n`
+        );
+        this.stopHeartbeat(connectionId);
+        socket.close(1001, 'Heartbeat timeout');
+        return;
+      }
+
+      try {
+        socket.send(JSON.stringify({ type: 'ping' }));
+      } catch (err) {
+        process.stderr.write(
+          `[webmcp-extension-relay] warn: failed to send heartbeat ping to ${connectionId}: ${err instanceof Error ? err.message : String(err)}\n`
+        );
+      }
+    }, HEARTBEAT_INTERVAL_MS);
+
+    this.heartbeatIntervalByConnectionId.set(connectionId, intervalId);
+  }
+
+  private stopHeartbeat(connectionId: string): void {
+    const intervalId = this.heartbeatIntervalByConnectionId.get(connectionId);
+    if (intervalId !== undefined) {
+      clearInterval(intervalId);
+      this.heartbeatIntervalByConnectionId.delete(connectionId);
+    }
+    this.lastPongByConnectionId.delete(connectionId);
+  }
+
+  private async startAsClient(port = this.desiredPort): Promise<void> {
+    this.stopping = false;
+
+    const previousMode = this._mode;
+    const previousPort = this.desiredPort;
+    this._mode = 'client';
+    this.desiredPort = port;
+
+    try {
+      const { bufferedMessages, socket } = await this.connectToRelayServer(port);
+      this.clientSocket = socket;
+      this.clientReconnectDelay = 500;
+      this.clientReconnectAttempts = 0;
+      this.setupClientHandlers(socket, bufferedMessages);
+    } catch (error) {
+      this._mode = previousMode;
+      this.desiredPort = previousPort;
+      throw error;
+    }
+  }
+
+  private async connectToRelayServer(
+    port: number
+  ): Promise<{ bufferedMessages: RelayServerToClientMessage[]; socket: WebSocket }> {
+    return new Promise((resolve, reject) => {
+      const wsUrl = `ws://${this.host}:${port}`;
+      const ws = new WebSocket(wsUrl, RELAY_INTERNAL_PROTOCOL);
+      const bufferedMessages: RelayServerToClientMessage[] = [];
+
+      const cleanup = () => {
+        clearTimeout(timeoutId);
+        ws.off('close', onCloseBeforeReady);
+        ws.off('error', onErrorBeforeReady);
+        ws.off('message', onMessageBeforeReady);
+        ws.off('open', onOpen);
+      };
+
+      const rejectWith = (error: Error) => {
+        cleanup();
+        ws.once('error', () => {
+          // Ignore late socket errors from ports that failed relay verification.
+        });
+        ws.terminate();
+        reject(error);
+      };
+
+      const finish = () => {
+        cleanup();
+        resolve({ bufferedMessages, socket: ws });
+      };
+
+      const onOpen = () => {
+        try {
+          this.sendRelayClientHandshake(ws);
+        } catch (err) {
+          rejectWith(
+            new Error(
+              `Failed to send handshake to relay server at ${wsUrl}: ${err instanceof Error ? err.message : String(err)}`
+            )
+          );
+        }
+      };
+
+      const onErrorBeforeReady = (err: Error) => {
+        rejectWith(new Error(`Failed to connect to relay server at ${wsUrl}: ${err.message}`));
+      };
+
+      const onCloseBeforeReady = () => {
+        rejectWith(new Error(`Connection to ${wsUrl} closed before relay verification completed`));
+      };
+
+      const onMessageBeforeReady = (raw: WebSocket.RawData) => {
+        const message = this.parseRelayServerMessage(raw);
+        if (!message) {
+          rejectWith(new Error(`Received a non-relay response while probing ${wsUrl}`));
+          return;
+        }
+
+        bufferedMessages.push(message);
+
+        if (message.type === 'server-hello') {
+          if (message.service !== 'webmcp-extension-relay') {
+            rejectWith(new Error(`Unexpected relay service "${message.service}" at ${wsUrl}`));
+            return;
+          }
+          finish();
+          return;
+        }
+
+        if (message.type === 'relay/tools' || message.type === 'relay/tools-changed') {
+          finish();
+        }
+      };
+
+      const timeoutId = setTimeout(() => {
+        rejectWith(new Error(`Timed out waiting for relay hello from ${wsUrl}`));
+      }, RELAY_SERVER_MESSAGE_TIMEOUT_MS);
+
+      ws.once('open', onOpen);
+      ws.once('error', onErrorBeforeReady);
+      ws.once('close', onCloseBeforeReady);
+      ws.on('message', onMessageBeforeReady);
+    });
+  }
+
+  private setupClientHandlers(
+    ws: WebSocket,
+    bufferedMessages: RelayServerToClientMessage[] = []
+  ): void {
+    for (const message of bufferedMessages) {
+      this.processRelayServerMessage(message);
+    }
+
+    ws.on('message', (raw: WebSocket.RawData) => {
+      const message = this.parseRelayServerMessage(raw);
+      if (!message) {
+        return;
+      }
+
+      this.processRelayServerMessage(message);
+    });
+
+    ws.on('close', () => {
+      this.clientSocket = null;
+      for (const [callId, pending] of this.clientPendingInvocations) {
+        clearTimeout(pending.timeoutId);
+        this.clientPendingInvocations.delete(callId);
+        pending.reject(new Error('Relay server connection lost during invocation'));
+      }
+
+      this.clientTools = [];
+      this.clientSources = [];
+      this.clientToolSourceMap = {};
+      this.emit('stateChanged');
+
+      if (!this.stopping) {
+        this.scheduleReconnect();
+      }
+    });
+
+    ws.on('error', (err: Error) => {
+      process.stderr.write(
+        `[webmcp-extension-relay] warn: relay client socket error: ${err.message}\n`
+      );
+    });
+  }
+
+  private sendRelayClientHandshake(ws: WebSocket): void {
+    ws.send(JSON.stringify({ type: 'relay/hello' }));
+    ws.send(JSON.stringify({ type: 'relay/list-tools' }));
+  }
+
+  private parseRelayServerMessage(raw: WebSocket.RawData): RelayServerToClientMessage | null {
+    const text = this.rawDataToUtf8(raw);
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(text);
+    } catch (err) {
+      const preview = text.length > 200 ? `${text.slice(0, 200)}...` : text;
+      process.stderr.write(
+        `[webmcp-extension-relay] warn: invalid JSON from relay server (${err instanceof Error ? err.message : 'parse error'}): ${preview}\n`
+      );
+      return null;
+    }
+
+    const message = RelayServerToClientMessageSchema.safeParse(parsed);
+    if (!message.success) {
+      const typeField =
+        typeof parsed === 'object' && parsed !== null && 'type' in parsed ? parsed.type : 'unknown';
+      process.stderr.write(
+        `[webmcp-extension-relay] warn: invalid relay server message (type=${typeField}): ${message.error.message}\n`
+      );
+      return null;
+    }
+
+    return message.data;
+  }
+
+  private processRelayServerMessage(message: RelayServerToClientMessage): void {
+    switch (message.type) {
+      case 'server-hello':
+        break;
+
+      case 'relay/tools':
+      case 'relay/tools-changed':
+        this.clientTools = message.tools;
+        this.clientSources = message.sources;
+        this.clientToolSourceMap = message.toolSourceMap;
+        this.emit('stateChanged');
+        break;
+
+      case 'relay/result': {
+        const pending = this.clientPendingInvocations.get(message.callId);
+        if (!pending) {
+          process.stderr.write(
+            `[webmcp-extension-relay] warn: received relay result for unknown callId ${message.callId}\n`
+          );
+          break;
+        }
+        clearTimeout(pending.timeoutId);
+        this.clientPendingInvocations.delete(message.callId);
+        pending.resolve(message.result);
+        break;
+      }
+    }
+  }
+
+  private scheduleReconnect(): void {
+    if (this.clientReconnectTimer || this.stopping) {
+      return;
+    }
+
+    this.clientReconnectAttempts++;
+    if (this.clientReconnectAttempts >= this.clientMaxReconnectAttempts) {
+      process.stderr.write(
+        `[webmcp-extension-relay] error: giving up reconnection after ${this.clientReconnectAttempts} attempts\n`
+      );
+      return;
+    }
+
+    const delay = this.clientReconnectDelay;
+    this.clientReconnectDelay = Math.min(
+      this.clientReconnectDelay * 1.5,
+      this.clientMaxReconnectDelay
+    );
+
+    this.clientReconnectTimer = setTimeout(() => {
+      this.clientReconnectTimer = null;
+      if (this.stopping) {
+        return;
+      }
+
+      void this.reconnectWithModePromotion();
+    }, delay);
+  }
+
+  /**
+   * Attempts to promote from client to server mode when reconnecting.
+   * Re-runs the same attach-or-bind strategy used during startup.
+   */
+  private async reconnectWithModePromotion(): Promise<void> {
+    try {
+      await this.startUsingPortStrategy();
+      this.clientReconnectDelay = 500;
+      this.clientReconnectAttempts = 0;
+      if (this._mode === 'server') {
+        process.stderr.write('[webmcp-extension-relay] info: promoted from client to server mode\n');
+        this.emit('stateChanged');
+      }
+    } catch (err) {
+      process.stderr.write(
+        `[webmcp-extension-relay] warn: reconnection failed: ${err instanceof Error ? err.message : String(err)}\n`
+      );
+      if (!this.stopping) {
+        this.scheduleReconnect();
+      }
+    }
+  }
+
+  private async invokeToolViaRelay(
+    toolName: string,
+    args: RelayInvokeArgs
+  ): Promise<RelayCallToolResult> {
+    if (!this.clientSocket || this.clientSocket.readyState !== WebSocket.OPEN) {
+      throw new Error('Not connected to relay server');
+    }
+
+    const callId = randomUUID();
+    const socket = this.clientSocket;
+
+    return new Promise<RelayCallToolResult>((resolve, reject) => {
+      const timeoutId = setTimeout(() => {
+        this.clientPendingInvocations.delete(callId);
+        reject(
+          new Error(
+            `Proxied invocation for tool "${toolName}" timed out after ${this.invokeTimeoutMs}ms`
+          )
+        );
+      }, this.invokeTimeoutMs);
+
+      this.clientPendingInvocations.set(callId, {
+        connectionId: 'relay-server',
+        timeoutId,
+        resolve,
+        reject,
+      });
+
+      const message: RelayClientToServerMessage = {
+        type: 'relay/invoke',
+        callId,
+        toolName,
+        args,
+      };
+
+      try {
+        socket.send(JSON.stringify(message));
+      } catch (err) {
+        clearTimeout(timeoutId);
+        this.clientPendingInvocations.delete(callId);
+        reject(
+          new Error(`Failed to send relay invocation: ${err instanceof Error ? err.message : err}`)
+        );
+      }
+    });
+  }
+
+  /**
+   * Builds the complete relay response payload including tools and source metadata.
+   */
+  private buildRelayToolsPayload(
+    type: 'relay/tools' | 'relay/tools-changed'
+  ): RelayServerToClientMessage {
+    const tools = this.registry.listTools();
+    const sources = this.registry.listSources();
+    const toolSourceMap: Record<string, string[]> = {};
+
+    for (const tool of tools) {
+      toolSourceMap[tool.name] = tool.sources.map((s) => s.sourceId);
+    }
+
+    return {
+      type,
+      tools: tools.map(({ originalName: _originalName, sources: _sources, ...tool }) => tool),
+      sources,
+      toolSourceMap,
+    };
+  }
+
+  private isHostOriginAllowed(origin: string | undefined): boolean {
+    if (this.allowedOrigins.includes('*')) {
+      return true;
+    }
+
+    if (!origin) {
+      return false;
+    }
+
+    if (this.allowedOrigins.includes(origin)) {
+      return true;
+    }
+
+    // Scheme wildcard: '<scheme>://*' (e.g. 'chrome-extension://*') allows any
+    // origin under that scheme — unpacked extensions get a random id, so an
+    // exact allowlist cannot be expressed without pinning the manifest key.
+    return this.allowedOrigins.some((allowed) => {
+      if (!allowed.endsWith('://*')) {
+        return false;
+      }
+      return origin.startsWith(`${allowed.slice(0, -'://*'.length)}://`);
+    });
+  }
+
+  private sendHelloAccepted(socket: WebSocket, message: RelayHelloAcceptedMessage): void {
+    try {
+      socket.send(JSON.stringify(message));
+    } catch (err) {
+      process.stderr.write(
+        `[webmcp-extension-relay] warn: failed to send hello acceptance: ${err instanceof Error ? err.message : String(err)}\n`
+      );
+      socket.close(1011, 'Failed to send hello acceptance');
+    }
+  }
+
+  private sendHelloRejected(
+    socket: WebSocket,
+    message: RelayHelloRejectedMessage,
+    closeCode: number,
+    closeReason: string
+  ): void {
+    try {
+      socket.send(JSON.stringify(message), () => {
+        try {
+          socket.close(closeCode, closeReason);
+        } catch {
+          // Ignore close failures after a rejection send attempt.
+        }
+      });
+    } catch (err) {
+      process.stderr.write(
+        `[webmcp-extension-relay] warn: failed to send hello rejection: ${err instanceof Error ? err.message : String(err)}\n`
+      );
+      socket.close(closeCode, closeReason);
+    }
+  }
+
+  /**
+   * Validates browser tool results against CallToolResultSchema.
+   * Non-conforming payloads are wrapped as error results with diagnostic text.
+   */
+  private normalizeCallToolResult(result: unknown): RelayCallToolResult {
+    const parsed = CallToolResultSchema.safeParse(result);
+    if (parsed.success) {
+      return parsed.data;
+    }
+
+    const preview = JSON.stringify(result)?.slice(0, 500) ?? 'undefined';
+    process.stderr.write(
+      `[webmcp-extension-relay] warn: tool returned invalid CallToolResult (${parsed.error.message}), wrapping as error: ${preview}\n`
+    );
+
+    return {
+      content: [
+        {
+          type: 'text',
+          text: `Tool returned an invalid result (expected {content: [...]}): ${preview}`,
+        },
+      ],
+      isError: true,
+    };
+  }
+
+  /**
+   * Converts WebSocket raw data variants to a UTF-8 string payload.
+   */
+  private rawDataToUtf8(raw: WebSocket.RawData): string {
+    if (Array.isArray(raw)) return Buffer.concat(raw).toString('utf8');
+    if (Buffer.isBuffer(raw)) return raw.toString('utf8');
+    return Buffer.from(raw).toString('utf8');
+  }
+}

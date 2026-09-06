@@ -1,0 +1,44 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 680 500" width="680" role="img">
+  <title>WebMCP 页面端与插件端架构及通信通道</title>
+  <desc>侧边栏经 chrome.tabs.connect(tabId) 连接隔离世界桥接，MCP Client 经 window.postMessage 与页面主世界 polyfill 通信</desc>
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M2 1L8 5L2 9" fill="none" stroke="context-stroke" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+    </marker>
+  </defs>
+  <rect x="240" y="40" width="200" height="56" rx="8" fill="#E6F1FB" stroke="#185FA5" stroke-width="0.5"/>
+  <text x="340" y="61" text-anchor="middle" dominant-baseline="central" font-size="13" font-weight="500" fill="#0C447C" font-family="sans-serif">侧边栏（扩展页面）</text>
+  <text x="340" y="80" text-anchor="middle" dominant-baseline="central" font-size="12" fill="#185FA5" font-family="sans-serif">panel-client 发起方</text>
+  <path d="M340 96 V120 H505 V186" fill="none" stroke="#185FA5" stroke-width="1.5" marker-end="url(#arrow)"/>
+  <text x="352" y="113" font-size="12" fill="#185FA5" font-family="sans-serif">chrome.tabs.connect(tabId)</text>
+  <text x="352" y="134" font-size="11" fill="#888780" font-family="sans-serif">port: webmcp-page-tools（活动标签页）</text>
+  <rect x="40" y="150" width="600" height="290" rx="20" fill="#F1EFE8" stroke="#888780" stroke-width="0.5"/>
+  <text x="60" y="174" font-size="13" font-weight="500" fill="#444441" font-family="sans-serif">浏览器标签页：同一页面，两个隔离的 JS 世界</text>
+  <rect x="60" y="190" width="230" height="230" rx="12" fill="#E1F5EE" stroke="#0F6E56" stroke-width="0.5"/>
+  <text x="175" y="212" text-anchor="middle" dominant-baseline="central" font-size="13" font-weight="500" fill="#085041" font-family="sans-serif">MAIN world（页面主世界）</text>
+  <rect x="75" y="230" width="200" height="52" rx="8" fill="#FFFFFF" stroke="#0F6E56" stroke-width="0.5"/>
+  <text x="175" y="250" text-anchor="middle" dominant-baseline="central" font-size="13" font-weight="500" fill="#04342C" font-family="sans-serif">html-app 业务代码</text>
+  <text x="175" y="268" text-anchor="middle" dominant-baseline="central" font-size="12" fill="#0F6E56" font-family="sans-serif">registerTool(get_status)</text>
+  <path d="M175 282 V306" fill="none" stroke="#0F6E56" stroke-width="1.5" marker-end="url(#arrow)"/>
+  <text x="185" y="298" font-size="11" fill="#0F6E56" font-family="sans-serif">registerTool</text>
+  <rect x="75" y="310" width="200" height="64" rx="8" fill="#FFFFFF" stroke="#0F6E56" stroke-width="0.5"/>
+  <text x="175" y="330" text-anchor="middle" dominant-baseline="central" font-size="13" font-weight="500" fill="#04342C" font-family="sans-serif">MCP Server（polyfill）</text>
+  <text x="175" y="347" text-anchor="middle" dominant-baseline="central" font-size="12" fill="#0F6E56" font-family="sans-serif">监听 window message</text>
+  <text x="175" y="363" text-anchor="middle" dominant-baseline="central" font-size="12" fill="#0F6E56" font-family="sans-serif">channel: mcp-default</text>
+  <rect x="390" y="190" width="230" height="230" rx="12" fill="#E6F1FB" stroke="#185FA5" stroke-width="0.5"/>
+  <text x="505" y="212" text-anchor="middle" dominant-baseline="central" font-size="13" font-weight="500" fill="#0C447C" font-family="sans-serif">隔离世界（content script）</text>
+  <rect x="405" y="230" width="200" height="52" rx="8" fill="#FFFFFF" stroke="#185FA5" stroke-width="0.5"/>
+  <text x="505" y="250" text-anchor="middle" dominant-baseline="central" font-size="13" font-weight="500" fill="#042C53" font-family="sans-serif">page-tools-bridge</text>
+  <text x="505" y="268" text-anchor="middle" dominant-baseline="central" font-size="12" fill="#185FA5" font-family="sans-serif">监听 runtime.onConnect</text>
+  <path d="M505 282 V306" fill="none" stroke="#185FA5" stroke-width="1.5" marker-end="url(#arrow)"/>
+  <text x="515" y="298" font-size="11" fill="#185FA5" font-family="sans-serif">代理请求</text>
+  <rect x="405" y="310" width="200" height="64" rx="8" fill="#FFFFFF" stroke="#185FA5" stroke-width="0.5"/>
+  <text x="505" y="330" text-anchor="middle" dominant-baseline="central" font-size="13" font-weight="500" fill="#042C53" font-family="sans-serif">MCP Client</text>
+  <text x="505" y="347" text-anchor="middle" dominant-baseline="central" font-size="12" fill="#185FA5" font-family="sans-serif">TabClientTransport</text>
+  <text x="505" y="363" text-anchor="middle" dominant-baseline="central" font-size="12" fill="#185FA5" font-family="sans-serif">JSON-RPC 会话</text>
+  <path d="M275 342 H405" fill="none" stroke="#5F5E5A" stroke-width="1.5" marker-start="url(#arrow)" marker-end="url(#arrow)"/>
+  <text x="340" y="328" text-anchor="middle" font-size="12" fill="#444441" font-family="sans-serif">postMessage</text>
+  <text x="340" y="360" text-anchor="middle" font-size="11" fill="#888780" font-family="sans-serif">JSON-RPC 双向</text>
+  <text x="340" y="464" text-anchor="middle" font-size="12" fill="#5F5E5A" font-family="sans-serif">通道① window.postMessage（mcp-default）：MCP JSON-RPC 协议</text>
+  <text x="340" y="482" text-anchor="middle" font-size="12" fill="#5F5E5A" font-family="sans-serif">通道② chrome.tabs.connect(tabId)（webmcp-page-tools）：listTools / callTool</text>
+</svg>

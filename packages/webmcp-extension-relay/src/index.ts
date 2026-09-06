@@ -1,0 +1,50 @@
+/**
+ * Public package exports for WebMCP Local Relay.
+ */
+
+export { RelayBridgeServer, type RelayBridgeServerOptions } from './bridgeServer.js';
+export { type CliOptions, parseCliOptions, printHelp } from './cli-utils.js';
+export { LocalRelayMcpServer, type LocalRelayMcpServerOptions } from './mcpRelayServer.js';
+export { buildPublicToolName, extractSanitizedDomain, sanitizeName } from './naming.js';
+export {
+  CallToolRequestParamsSchema,
+  CallToolResultSchema,
+  DEFAULT_TOOL_INPUT_SCHEMA,
+  InboundToolSchema,
+  NormalizedToolSchema,
+  normalizeInboundTool,
+  type RelayCallToolResult,
+  type RelayInvokeArgs,
+  RelayInvokeArgsSchema,
+  type RelayTool,
+  type RelayToolAnnotations,
+  ToolAnnotationsSchema,
+  ToolSchema,
+} from './protocol.js';
+export {
+  type AggregatedTool,
+  HelloRequiredError,
+  RelayRegistry,
+  type ResolvedInvocation,
+  type SourceInfo,
+} from './registry.js';
+export {
+  type BrowserToRelayMessage,
+  BrowserToRelayMessageSchema,
+  type RelayHelloAcceptedMessage,
+  RelayHelloAcceptedMessageSchema,
+  type RelayHelloRejectedMessage,
+  RelayHelloRejectedMessageSchema,
+  type RelayClientToServerMessage,
+  RelayClientToServerMessageSchema,
+  type RelayDescriptor,
+  RelayDescriptorSchema,
+  type RelayServerToClientMessage,
+  RelayServerToClientMessageSchema,
+  type RelaySourceInfo,
+  RelaySourceInfoSchema,
+  type RelayToBrowserMessage,
+  RelayToBrowserMessageSchema,
+  type ServerHelloMessage,
+  ServerHelloMessageSchema,
+} from './schemas.js';

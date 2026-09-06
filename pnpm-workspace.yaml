@@ -6,10 +6,16 @@ packages:
 # 版本号对齐 git-source/npm-packages 上游 monorepo，保证与移植代码的 API 形态一致。
 catalog:
   '@modelcontextprotocol/client': 2.0.0
+  # webmcp-local-relay 依赖（版本锚点对齐 git-source/npm-packages 上游 catalog）
+  '@modelcontextprotocol/core': 2.0.0
+  '@modelcontextprotocol/server': 2.0.0
+  zod: 4.4.3
   '@mcp-b/transports': ^5.1.0
   '@mcp-b/global': ^5.1.0
   '@mcp-b/webmcp-polyfill': ^5.1.0
   '@mcp-b/webmcp-types': ^5.1.0
+  # 侧边栏聊天 UI 框架（Vue 3 + TypeScript，运行时编译模板的 esm-bundler 全量构建）
+  vue: ^3.5.13
   '@types/node': ^22.20.1
   playwright: ^1.62.1
   typescript: ^5.8.3
@@ -17,6 +23,8 @@ catalog:
   vite-plus: 0.1.24
   eslint: ^9.0.0
   vitest: ^5.0.0
+  # vitest 覆盖率插件须与 vitest 主版本一致（上游 4.1.8 对应 vitest 4，本仓库 vitest 5）
+  '@vitest/coverage-v8': ^5.0.0
 
 # 允许 pnpm 构建需要原生二进制/后置脚本的依赖（避免交互式确认阻塞 CI）
 onlyBuiltDependencies:
