@@ -318,6 +318,62 @@ export class LocalRelayMcpServer {
         };
       }
     );
+
+    this.mcpServer.registerTool(
+      'webmcp_tool_call',
+      {
+        description:
+          'Call a relayed WebMCP page tool by its public name. Discover names via webmcp_list_tools first.',
+        inputSchema: z.object({
+          toolName: z
+            .string()
+            .min(1)
+            .describe(
+              'Public tool name as returned by webmcp_list_tools (multiple tabs exposing the same tool get a _<tabId> suffix).'
+            ),
+          args: z
+            .record(z.string(), z.unknown())
+            .optional()
+            .describe('Arguments passed through to the page tool. Defaults to {}.'),
+          sourceId: z
+            .string()
+            .optional()
+            .describe(
+              'Exact sourceId (=connectionId) to route the call. Falls back to tabId matching when no source matches.'
+            ),
+          requestTabId: z
+            .string()
+            .optional()
+            .describe(
+              'Strict tabId routing (no fallback). Use either sourceId or requestTabId for targeted calls.'
+            ),
+        }),
+        annotations: { readOnlyHint: false },
+      },
+      async ({ toolName, args, sourceId, requestTabId }) => {
+        try {
+          return await this.bridge.invokeTool(toolName, args ?? {}, {
+            ...(sourceId === undefined ? {} : { sourceId }),
+            ...(requestTabId === undefined ? {} : { requestTabId }),
+          });
+        } catch (err) {
+          const message = err instanceof Error ? err.message : String(err);
+          const details = err instanceof Error ? (err.stack ?? err.message) : String(err);
+          process.stderr.write(
+            `[webmcp-extension-relay] error: webmcp_tool_call "${toolName}" invocation failed: ${details}\n`
+          );
+          return {
+            content: [
+              {
+                type: 'text' as const,
+                text: `Failed to invoke relayed tool "${toolName}": ${message}`,
+              },
+            ],
+            isError: true,
+          };
+        }
+      }
+    );
   }
 
   /**

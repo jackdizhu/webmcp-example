@@ -1,6 +1,6 @@
 # webmcp_tool_call · relay MCP 端通用工具调用入口设计
 
-> 状态：设计稿 v1（待评审）· 2026-09-06
+> 状态：✅ 已实施并验证（2026-09-06）· relay 227/227（+5 用例）、tsc/lint 全绿
 > 范围：`packages/webmcp-extension-relay`（仅 relay 包，扩展端零改动）
 
 ## 1. 背景与动机
