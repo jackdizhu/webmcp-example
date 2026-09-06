@@ -7,7 +7,7 @@ import { logEvent } from './logger';
 /** LLM 服务配置（API Key 存 chrome.storage.local，禁止硬编码）。 */
 export interface LlmConfig {
   apiKey: string;
-  /** 形如 https://api.deepseek.com/v1 的基础地址（不含 /chat/completions）。 */
+  /** 形如 https://api.deepseek.com 的基础地址（不含 /chat/completions；最终请求端点为 baseUrl + '/chat/completions'）。 */
   baseUrl: string;
   model: string;
 }

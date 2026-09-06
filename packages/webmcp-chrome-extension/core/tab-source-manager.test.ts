@@ -212,7 +212,7 @@ describe('startTabSourceManager', () => {
 
     const events: Array<{ phase: string; entry: { callId: string; ok?: boolean } }> = [];
     const unsubscribe = manager.onInvokeLog((phase, entry) => {
-      events.push({ phase, entry: { callId: entry.callId, ok: entry.ok } });
+      events.push({ phase, entry: { callId: entry.callId, ...(entry.ok !== undefined ? { ok: entry.ok } : {}) } });
     });
 
     manager.recordInvokeLog('started', {

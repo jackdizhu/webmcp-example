@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import {
   AgentAbortError,
   runAgentLoop,
+  trimHistory,
   type AgentLoopEvent,
   type AgentTool,
   type ChatMessage,
@@ -182,5 +183,65 @@ describe('runAgentLoop', () => {
 
     expect(result.text).toBe('done');
     expect(seenSignals[0]).toBe(controller.signal);
+  });
+});
+
+describe('trimHistory 按轮裁剪', () => {
+  /** 构造若干轮（每轮 user + 可选 assistant/tool），以 user 收尾。 */
+  const turns = (count: number): ChatMessage[] => {
+    const items: ChatMessage[] = [];
+    for (let i = 1; i <= count; i += 1) {
+      items.push({ role: 'user', content: `u${i}` });
+      items.push({ role: 'assistant', content: `a${i}`, toolCalls: [{ id: `c${i}`, function: { name: 't', arguments: '{}' } }] });
+      items.push({ role: 'tool', content: `r${i}`, toolCallId: `c${i}` });
+    }
+    return items;
+  };
+
+  it('轮数不足上限时原样返回', () => {
+    const history = turns(3);
+    expect(trimHistory(history, 5)).toHaveLength(9);
+  });
+
+  it('保留最近 N 轮，丢弃更早的整轮', () => {
+    const history = turns(7);
+    const kept = trimHistory(history, 3);
+    expect(kept).toHaveLength(9);
+    expect(kept[0]).toEqual({ role: 'user', content: 'u5' });
+    expect(kept.some((m) => m.content === 'u1' || m.content === 'r1')).toBe(false);
+  });
+
+  it('切点为 user 消息，assistant tool_calls 始终配对其 tool 消息', () => {
+    const history = turns(6);
+    for (let max = 1; max <= 6; max += 1) {
+      const kept = trimHistory(history, max);
+      expect(kept[0]?.role).toBe('user');
+      // 每个 tool_calls 后紧跟对应 toolCallId 的 tool 消息
+      for (let i = 0; i < kept.length; i += 1) {
+        const msg = kept[i];
+        const calls = msg?.toolCalls;
+        if (calls && calls.length > 0) {
+          const toolMsg = kept[i + 1];
+          expect(toolMsg?.role).toBe('tool');
+          expect(toolMsg?.toolCallId).toBe(calls[0]?.id);
+        }
+      }
+    }
+  });
+
+  it('maxTurns <= 0 与不裁剪语义（0/负数/小数/非整数）', () => {
+    const history = turns(5);
+    expect(trimHistory(history, 0)).toHaveLength(15);
+    expect(trimHistory(history, -3)).toHaveLength(15);
+    expect(trimHistory(history, 2.5)).toHaveLength(15);
+    expect(trimHistory(history, Number.NaN)).toHaveLength(15);
+  });
+
+  it('不改变原数组（返回浅拷贝切片）', () => {
+    const history = turns(4);
+    const snapshot = JSON.stringify(history);
+    const kept = trimHistory(history, 2);
+    kept.push({ role: 'user', content: 'x' });
+    expect(JSON.stringify(history)).toBe(snapshot);
   });
 });

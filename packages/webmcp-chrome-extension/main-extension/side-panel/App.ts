@@ -5,7 +5,7 @@
 // 生命周期（Port 桥接连断）。渲染全部下沉到 components/ 与 pages/（h() 渲染函数，
 // MV3 扩展页 CSP 禁止运行时字符串编译，见 issues/001）。
 import { computed, defineComponent, h, onMounted, onUnmounted, reactive, ref, watch } from 'vue';
-import { AgentAbortError, runAgentLoop, type AgentLoopEvent, type AgentTool, type ChatMessage } from './agent-loop';
+import { AgentAbortError, runAgentLoop, trimHistory, type AgentLoopEvent, type AgentLoopOptions, type AgentTool, type ChatMessage } from './agent-loop';
 import { composeHandoffMessage, type DebugRun } from './debugger-core';
 import { createOpenAiCompatClient } from './llm-client';
 import {
@@ -53,6 +53,8 @@ export const App = defineComponent({
       model: '',
       debugMode: false,
       consoleOutput: false,
+      systemPrompt: '',
+      maxHistoryTurns: 0,
     });
     /** 顶部页面路由：agent 对话 / tools 调试 / relay 调用 / 设置。 */
     const activeTab = ref<PanelPage>('chat');
@@ -175,18 +177,25 @@ export const App = defineComponent({
           baseUrl: settings.baseUrl,
           model: settings.model,
         });
+        // 历史裁剪：保留最近 maxHistoryTurns 轮（0 = 不裁剪），随 transcript 收敛逐轮有界
+        const boundedHistory = trimHistory(history, settings.maxHistoryTurns);
+        const loopOptions: AgentLoopOptions = {
+          onEvent: (event) => applyEvent(assistantItem, event),
+          signal,
+        };
+        // 空串归一化为 undefined：agent-loop 的 ?? 回退仅对 undefined/null 生效
+        // （exactOptionalPropertyTypes 下不能直接塞 undefined，故按需赋值）
+        const trimmedPrompt = settings.systemPrompt.trim();
+        if (trimmedPrompt) loopOptions.systemPrompt = trimmedPrompt;
         const result = await runAgentLoop(
           // 历史以本轮用户消息结尾（agent-loop 约定）
-          [...history, { role: 'user' as const, content: userText }],
+          [...boundedHistory, { role: 'user' as const, content: userText }],
           tools,
           {
             llm,
             executeTool: (name, args) => pageTools!.callTool(name, args),
           },
-          {
-            onEvent: (event) => applyEvent(assistantItem, event),
-            signal,
-          }
+          loopOptions
         );
         assistantItem.content = result.text;
         history = result.transcript;
@@ -255,16 +264,21 @@ export const App = defineComponent({
       }
     };
 
+    /** 把响应式 settings 收敛为待持久化快照，避免 saveSettings 调用处手写字段列表（含新增字段）。 */
+    const toPanelSettings = (): PanelSettings => ({
+      apiKey: settings.apiKey,
+      baseUrl: settings.baseUrl,
+      model: settings.model,
+      debugMode: settings.debugMode,
+      consoleOutput: settings.consoleOutput,
+      systemPrompt: settings.systemPrompt,
+      maxHistoryTurns: settings.maxHistoryTurns,
+    });
+
     /** 设置页「快速切换调试模式」：立即持久化并生效，不等「保存」按钮。 */
     const toggleDebugMode = async (): Promise<void> => {
       settings.debugMode = !settings.debugMode;
-      await saveSettings({
-        apiKey: settings.apiKey,
-        baseUrl: settings.baseUrl,
-        model: settings.model,
-        debugMode: settings.debugMode,
-        consoleOutput: settings.consoleOutput,
-      });
+      await saveSettings(toPanelSettings());
       logEvent('info', 'app', 'debug_mode_toggled', settings.debugMode ? 'on' : 'off');
       if (settings.debugMode) {
         // 开启：直达 tools 调试页（一键入口的核心诉求）
@@ -273,13 +287,7 @@ export const App = defineComponent({
     };
 
     const persistSettings = async (): Promise<void> => {
-      await saveSettings({
-        apiKey: settings.apiKey,
-        baseUrl: settings.baseUrl,
-        model: settings.model,
-        debugMode: settings.debugMode,
-        consoleOutput: settings.consoleOutput,
-      });
+      await saveSettings(toPanelSettings());
       // 控制台输出开关立即生效（保存后无需重开侧栏）
       setConsoleOutput(settings.consoleOutput);
       setTab('chat');
@@ -336,6 +344,8 @@ export const App = defineComponent({
       settings.model = loaded.model;
       settings.debugMode = loaded.debugMode;
       settings.consoleOutput = loaded.consoleOutput;
+      settings.systemPrompt = loaded.systemPrompt;
+      settings.maxHistoryTurns = loaded.maxHistoryTurns;
       setConsoleOutput(loaded.consoleOutput);
       // 调试模式：侧栏打开时默认进入 tools 调试页
       if (settings.debugMode) activeTab.value = 'debug';
