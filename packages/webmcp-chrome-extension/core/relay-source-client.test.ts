@@ -234,10 +234,11 @@ describe('RelaySourceClient 发现与握手', () => {
 describe('RelaySourceClient 运行期消息', () => {
   /** 建立到已接受握手的活跃连接。 */
   async function connectAccepted(
-    facadeOverrides: Partial<RelayToolsFacade> = {}
+    facadeOverrides: Partial<RelayToolsFacade> = {},
+    clientOverrides: Partial<ConstructorParameters<typeof RelaySourceClient>[0]> = {}
   ): Promise<{ client: RelaySourceClient; socket: FakeSocket; facade: ReturnType<typeof createFacadeStub> }> {
     const facade = createFacadeStub(facadeOverrides);
-    const client = createClient({ facade, autoConnect: false, invokeTimeoutMs: 20 });
+    const client = createClient({ facade, autoConnect: false, invokeTimeoutMs: 20, ...clientOverrides });
     client.start();
     await vi.waitFor(() => expect(FakeSocket.instances).toHaveLength(1));
     const socket = FakeSocket.instances[0]!;
@@ -294,6 +295,55 @@ describe('RelaySourceClient 运行期消息', () => {
     const { client, socket } = await connectAccepted();
     socket.receive({ type: 'ping' });
     expect(socket.sent.some((m) => m.includes('"type":"pong"'))).toBe(true);
+    client.stop();
+  });
+
+  it('onInvokeLog 依次收到 started 与 finished（成功带结果摘要）', async () => {
+    const onInvokeLog = vi.fn();
+    const { client, socket } = await connectAccepted({}, { onInvokeLog });
+    socket.receive({ type: 'invoke', callId: 'call-log-1', toolName: 'get_status', args: { q: 'x' } });
+
+    await vi.waitFor(() => {
+      expect(socket.sent.some((m) => m.includes('"type":"result"'))).toBe(true);
+    });
+    expect(onInvokeLog).toHaveBeenCalledTimes(2);
+    const [startedPhase, startedEntry] = onInvokeLog.mock.calls[0]!;
+    expect(startedPhase).toBe('started');
+    expect(startedEntry).toMatchObject({
+      callId: 'call-log-1',
+      toolName: 'get_status',
+      argsSummary: '{"q":"x"}',
+    });
+    expect('ok' in startedEntry).toBe(false);
+    const [finishedPhase, finishedEntry] = onInvokeLog.mock.calls[1]!;
+    expect(finishedPhase).toBe('finished');
+    expect(finishedEntry).toMatchObject({
+      callId: 'call-log-1',
+      ok: true,
+      elapsedMs: expect.any(Number),
+      resultSummary: expect.stringContaining('ok'),
+    });
+    client.stop();
+  });
+
+  it('调用失败时 onInvokeLog finished 携带 ok=false 与错误文本', async () => {
+    const onInvokeLog = vi.fn();
+    const { client, socket } = await connectAccepted(
+      {
+        callTool: vi.fn(async () => {
+          throw new Error('tool exploded');
+        }),
+      },
+      { onInvokeLog }
+    );
+    socket.receive({ type: 'invoke', callId: 'call-log-2', toolName: 'boom', args: {} });
+
+    await vi.waitFor(() => {
+      expect(onInvokeLog).toHaveBeenCalledTimes(2);
+    });
+    const [finishedPhase, finishedEntry] = onInvokeLog.mock.calls[1]!;
+    expect(finishedPhase).toBe('finished');
+    expect(finishedEntry).toMatchObject({ callId: 'call-log-2', ok: false, resultSummary: 'tool exploded' });
     client.stop();
   });
 

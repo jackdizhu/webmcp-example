@@ -201,6 +201,60 @@ describe('startTabSourceManager', () => {
     manager.stop();
   });
 
+  it('recordInvokeLog 写入环形缓冲并通知监听器（started 追加 / finished 合并）', async () => {
+    const tabsStub = createTabsStub();
+    const { factory } = createClientStubFactory();
+    const manager = startTabSourceManager({
+      tabsApi: tabsStub,
+      clientFactory: factory,
+      endpointCache: createMemoryCache(),
+    });
+
+    const events: Array<{ phase: string; entry: { callId: string; ok?: boolean } }> = [];
+    const unsubscribe = manager.onInvokeLog((phase, entry) => {
+      events.push({ phase, entry: { callId: entry.callId, ok: entry.ok } });
+    });
+
+    manager.recordInvokeLog('started', {
+      callId: 'c-1',
+      tabId: 7,
+      toolName: 'get_status',
+      startedAt: 1000,
+      argsSummary: '{}',
+    });
+    manager.recordInvokeLog('finished', {
+      callId: 'c-1',
+      tabId: 7,
+      toolName: 'get_status',
+      startedAt: 1000,
+      argsSummary: '{}',
+      elapsedMs: 42,
+      ok: true,
+      resultSummary: '{"ok":1}',
+    });
+
+    expect(events).toEqual([
+      { phase: 'started', entry: { callId: 'c-1', ok: undefined } },
+      { phase: 'finished', entry: { callId: 'c-1', ok: true } },
+    ]);
+    const logs = manager.getInvokeLogs();
+    expect(logs).toHaveLength(1);
+    expect(logs[0]).toMatchObject({ callId: 'c-1', ok: true, elapsedMs: 42, tabId: 7 });
+    unsubscribe();
+
+    // 取消订阅后不再通知，但缓冲继续累积
+    manager.recordInvokeLog('started', {
+      callId: 'c-2',
+      tabId: 7,
+      toolName: 'echo',
+      startedAt: 2000,
+      argsSummary: '{}',
+    });
+    expect(events).toHaveLength(2);
+    expect(manager.getInvokeLogs()).toHaveLength(2);
+    manager.stop();
+  });
+
   it('标签页导航完成后创建源，端口走 page-tools 桥接协议', async () => {
     const tabsStub = createTabsStub();
     const { stubs, factory } = createClientStubFactory();
@@ -566,5 +620,60 @@ describe('startRelayStatusPort', () => {
     // 侧边栏主动请求 → 重发快照
     port.receive({ type: 'subscribe' });
     expect(port.sent[2]).toEqual({ type: 'snapshot', statuses: [makeStatus({ toolsCount: 1 })] });
+  });
+
+  it('连接下发调用日志快照，事件推送增量，断开取消订阅', async () => {
+    const runtimeStub = createRuntimeStub();
+    const invokeLogListeners = new Set<
+      (phase: 'started' | 'finished', entry: { callId: string }) => void
+    >();
+    const buffered = [{ callId: 'c-0', tabId: 1, toolName: 't', startedAt: 1, argsSummary: '{}' }];
+    const manager = {
+      getStatuses: () => [],
+      onStatusChange: () => () => undefined,
+      getInvokeLogs: () => buffered,
+      onInvokeLog: (listener: (phase: 'started' | 'finished', entry: { callId: string }) => void) => {
+        invokeLogListeners.add(listener);
+        return () => {
+          invokeLogListeners.delete(listener);
+        };
+      },
+    };
+    startRelayStatusPort(manager as never, runtimeStub as never);
+
+    const port = runtimeStub.emitConnect(RELAY_STATUS_PORT_NAME);
+    expect(port.sent[0]).toEqual({ type: 'snapshot', statuses: [] });
+    expect(port.sent[1]).toEqual({ type: 'invoke-logs', entries: buffered });
+
+    // 增量事件推送
+    for (const listener of invokeLogListeners) {
+      listener('started', { callId: 'c-1' });
+    }
+    expect(port.sent[2]).toEqual({
+      type: 'invoke-log',
+      phase: 'started',
+      entry: { callId: 'c-1' },
+    });
+
+    // 断开后不再推送
+    port.disconnect();
+    expect(invokeLogListeners).toHaveLength(0);
+    for (const listener of [...invokeLogListeners]) {
+      listener('finished', { callId: 'c-1' });
+    }
+    expect(port.sent).toHaveLength(3);
+  });
+
+  it('manager 未提供调用日志接口时仅推送状态（向后兼容）', async () => {
+    const runtimeStub = createRuntimeStub();
+    const manager = {
+      getStatuses: () => [],
+      onStatusChange: () => () => undefined,
+    };
+    startRelayStatusPort(manager as never, runtimeStub as never);
+
+    const port = runtimeStub.emitConnect(RELAY_STATUS_PORT_NAME);
+    expect(port.sent).toHaveLength(1);
+    expect(port.sent[0]).toEqual({ type: 'snapshot', statuses: [] });
   });
 });

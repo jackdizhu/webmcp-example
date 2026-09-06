@@ -12,6 +12,7 @@
 // - WebSocket 工厂、端点缓存、reload 回调均可注入，保证 SW 外可单测（jsdom 无真实 WS）。
 import type { PageToolMeta } from './page-tools-bridge';
 import { queryLoopbackPermission, type LnaPermissionQuerier, type LnaPermissionState } from './relay-lna-permission';
+import type { RelayInvokeLogPhase } from './relay-status-protocol';
 
 /** relay 浏览器协议子协议（上游 shared.ts RELAY_BROWSER_PROTOCOL）。 */
 export const RELAY_BROWSER_PROTOCOL = 'webmcp.v1';
@@ -159,6 +160,12 @@ export interface RelaySourceClientOptions {
   debugLog?: boolean;
   /** LNA 权限查询注入（默认 queryLoopbackPermission；测试注入桩）。 */
   queryLoopbackPermission?: LnaPermissionQuerier;
+  /**
+   * relay 工具调用日志回调：SW 编排层借此把调用过程汇聚到侧栏「relay 调用」页
+   * 只读展示（started 追加、finished 合并，见 relay-status-protocol.ts）。
+   * entry 不含 tabId —— 由编排层回填真实 Chrome tabId。
+   */
+  onInvokeLog?: (phase: RelayInvokeLogPhase, entry: InvokeLogDraft) => void;
 }
 
 type RelayRuntimePhase = 'idle' | 'discovering' | 'dormant';
@@ -218,6 +225,30 @@ function summarizeArgs(args: Record<string, unknown>, max = 200): string {
   }
 }
 
+/** 调用日志条目草稿（不含 tabId，编排层回填；finished 阶段追加结果字段）。 */
+export interface InvokeLogDraft {
+  callId: string;
+  toolName: string;
+  startedAt: number;
+  argsSummary: string;
+  /** finished 阶段才有：耗时 ms。 */
+  elapsedMs?: number;
+  /** finished 阶段才有：true 成功 / false 失败。 */
+  ok?: boolean;
+  /** finished 阶段才有：结果摘要或错误文本（截断）。 */
+  resultSummary?: string;
+}
+
+/** 结果摘要（截断，成功展示用）。 */
+function summarizeResult(result: unknown, max = 300): string {
+  try {
+    const text = JSON.stringify(result) ?? 'null';
+    return text.length > max ? `${text.slice(0, max)}…(+${String(text.length - max)})` : text;
+  } catch {
+    return '<unserializable result>';
+  }
+}
+
 /** 解析 server-hello（字段校验对照上游 parseRelayHello）。 */
 function parseServerHello(value: unknown): RelayServerHello | null {
   if (!isJsonObject(value) || value['type'] !== 'server-hello') {
@@ -266,6 +297,7 @@ export class RelaySourceClient {
   private readonly invokeTimeoutMs: number;
   private readonly debugLog: boolean;
   private readonly queryLoopbackPermissionFn: LnaPermissionQuerier;
+  private readonly onInvokeLog: ((phase: RelayInvokeLogPhase, entry: InvokeLogDraft) => void) | undefined;
 
   private phase: RelayRuntimePhase = 'idle';
   private activeSocket: RelaySocket | null = null;
@@ -305,6 +337,7 @@ export class RelaySourceClient {
     this.invokeTimeoutMs = options.invokeTimeoutMs ?? INVOKE_TIMEOUT_MS;
     this.debugLog = options.debugLog ?? true;
     this.queryLoopbackPermissionFn = options.queryLoopbackPermission ?? queryLoopbackPermission;
+    this.onInvokeLog = options.onInvokeLog;
     if (options.onStatusChange) {
       this.statusListeners.add(options.onStatusChange);
     }
@@ -813,6 +846,7 @@ export class RelaySourceClient {
     }
     const invokeStart = Date.now();
     relayLog('info', this.debugLog, this.source.tabId, [`invoke → ${toolName} args=${summarizeArgs(args)}`]);
+    this.onInvokeLog?.('started', { callId, toolName, startedAt: invokeStart, argsSummary: summarizeArgs(args) });
 
     try {
       const result = await Promise.race([
@@ -821,16 +855,36 @@ export class RelaySourceClient {
           setTimeout(() => reject(new Error(`Host response timeout: invoke ${toolName}`)), this.invokeTimeoutMs);
         }),
       ]);
+      const elapsedMs = Date.now() - invokeStart;
       relayLog(
         'info',
         this.debugLog,
         this.source.tabId,
-        [`invoke ← ${toolName} ok in ${String(Date.now() - invokeStart)}ms`]
+        [`invoke ← ${toolName} ok in ${String(elapsedMs)}ms`]
       );
+      this.onInvokeLog?.('finished', {
+        callId,
+        toolName,
+        startedAt: invokeStart,
+        argsSummary: summarizeArgs(args),
+        elapsedMs,
+        ok: true,
+        resultSummary: summarizeResult(result),
+      });
       sendResult(result);
     } catch (error) {
       const text = error instanceof Error ? error.message : String(error);
-      relayLog('warn', true, this.source.tabId, [`invoke ← ${toolName} FAILED in ${String(Date.now() - invokeStart)}ms:`, text]);
+      const elapsedMs = Date.now() - invokeStart;
+      relayLog('warn', true, this.source.tabId, [`invoke ← ${toolName} FAILED in ${String(elapsedMs)}ms:`, text]);
+      this.onInvokeLog?.('finished', {
+        callId,
+        toolName,
+        startedAt: invokeStart,
+        argsSummary: summarizeArgs(args),
+        elapsedMs,
+        ok: false,
+        resultSummary: text,
+      });
       sendResult(errorResult(text));
     }
   }

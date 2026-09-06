@@ -1,10 +1,11 @@
-// 侧边栏聊天框根组件（Vue 3 + TypeScript）——纯编排层。
+// 侧边栏根组件（Vue 3 + TypeScript）——纯编排层。
 //
-// 职责边界：状态（设置/消息/Tab/连接）、agent 轮次编排（runTurn）、traceId 与日志埋点、
-// 生命周期（Port 桥接连断）。渲染全部下沉到 components/ 下的独立组件（h() 渲染函数，
+// 职责边界：全局状态（设置/消息/页面路由/连接/调用日志）、agent 轮次编排（runTurn +
+// 终止）、执行锁（agent 对话或 relay 调用进行中禁止切换页面）、traceId 与日志埋点、
+// 生命周期（Port 桥接连断）。渲染全部下沉到 components/ 与 pages/（h() 渲染函数，
 // MV3 扩展页 CSP 禁止运行时字符串编译，见 issues/001）。
-import { defineComponent, h, onMounted, onUnmounted, reactive, ref, watch } from 'vue';
-import { runAgentLoop, type AgentLoopEvent, type AgentTool, type ChatMessage } from './agent-loop';
+import { computed, defineComponent, h, onMounted, onUnmounted, reactive, ref, watch } from 'vue';
+import { AgentAbortError, runAgentLoop, type AgentLoopEvent, type AgentTool, type ChatMessage } from './agent-loop';
 import { composeHandoffMessage, type DebugRun } from './debugger-core';
 import { createOpenAiCompatClient } from './llm-client';
 import {
@@ -28,14 +29,15 @@ import {
   type PanelSettings,
 } from './panel-client';
 import { connectRelayStatus } from './relay-status-client';
-import type { RelayTabStatus } from '../../core/relay-status-protocol';
+import type { RelayInvokeLogEntry, RelayTabStatus } from '../../core/relay-status-protocol';
 import { AppHeader } from './components/AppHeader';
 import { RelayStatusBar } from './components/RelayStatusBar';
-import { SettingsPanel } from './components/SettingsPanel';
-import { TabBar } from './components/TabBar';
+import { TabBar, type PanelPage } from './components/TabBar';
 import { TOOL_PENDING_TEXT, type UiMessage } from './components/types';
 import { ChatPage } from './pages/ChatPage';
 import { DebugPage } from './pages/DebugPage';
+import { RelayPage } from './pages/RelayPage';
+import { SettingsPage } from './pages/SettingsPage';
 
 export const App = defineComponent({
   name: 'SidePanelApp',
@@ -45,7 +47,6 @@ export const App = defineComponent({
     const busy = ref(false);
     const connected = ref(false);
     const toolsCount = ref(0);
-    const showSettings = ref(false);
     const settings = reactive<PanelSettings>({
       apiKey: '',
       baseUrl: '',
@@ -53,21 +54,54 @@ export const App = defineComponent({
       debugMode: false,
       consoleOutput: false,
     });
-    /** 顶部 Tab：对话 / 调试（调试 Tab 仅在 debugMode 开启时可见）。 */
-    const activeTab = ref<'chat' | 'debug'>('chat');
+    /** 顶部页面路由：agent 对话 / tools 调试 / relay 调用 / 设置。 */
+    const activeTab = ref<PanelPage>('chat');
     /** 供渲染调试组件使用的客户端引用（onMounted 后非空）。 */
     const pageToolsRef = ref<PageToolsClient | null>(null);
 
     let pageTools: PageToolsClient | null = null;
     let unsubscribeStatus: (() => void) | null = null;
     let unsubscribeToolsChange: (() => void) | null = null;
-    // relay 连接状态订阅（SW 状态端口推送各标签页连接快照）
+    // relay 连接状态订阅（SW 状态端口推送各标签页连接快照 + 调用日志）
     let relayStatusClient: ReturnType<typeof connectRelayStatus> | null = null;
     let unsubscribeRelayStatus: (() => void) | null = null;
+    let unsubscribeInvokeLogs: (() => void) | null = null;
     /** 各标签页上一次的连接状态（diff 出迁移事件写日志）。 */
     const relayStateCache = new Map<number, string>();
     // agent 循环的多轮对话历史（不含 system 消息），跨轮次保留上下文
     let history: ChatMessage[] = [];
+    /** 本轮对话的终止控制器（runTurn 期间非空）。 */
+    let chatAbort: AbortController | null = null;
+
+    // ---- relay 调用日志（「relay 调用」页只读展示 + 执行锁数据源）----
+    const invokeLogs = ref<RelayInvokeLogEntry[]>([]);
+    /** 执行中的 relay 调用数（ok 缺省 = 仍在执行）。 */
+    const relayRunningCount = computed(
+      () => invokeLogs.value.filter((entry) => entry.ok === undefined).length
+    );
+    /**
+     * 用户已对 relay 调用点「终止」：执行锁立即解除，UI 停止等待；
+     * 页面工具调用无法真正中断，后台完成后结果照常落入日志。
+     */
+    const relayTerminated = ref(false);
+    watch(relayRunningCount, (count) => {
+      if (count === 0) relayTerminated.value = false;
+    });
+
+    /** 执行锁：agent 对话或 relay 调用进行中为 true。 */
+    const locked = computed(() => busy.value || relayRunningCount.value > 0);
+    /** 锁定期间 TabBar 展示的执行提示。 */
+    const phaseLabel = computed(() => {
+      if (busy.value) return 'agent 对话执行中';
+      if (relayRunningCount.value > 0) return 'relay 调用执行中';
+      return '';
+    });
+
+    /** 页面路由守卫：执行锁生效期间禁止切换（TabBar 已禁用，此处兜底）。 */
+    const setTab = (next: PanelPage): void => {
+      if (locked.value) return;
+      activeTab.value = next;
+    };
 
     const pushUiMessage = (role: UiMessage['role'], content: string): UiMessage => {
       const item: UiMessage = { role, content, toolTrace: [] };
@@ -113,21 +147,23 @@ export const App = defineComponent({
 
     /** 运行一轮 agent 对话（send 与调试「发送到对话」共用）。 */
     const runTurn = async (userText: string): Promise<void> => {
-      if (busy.value || !pageTools) return;
+      if (locked.value || !pageTools) return;
 
       if (settings.apiKey.length === 0) {
-        showSettings.value = true;
-        pushUiMessage('assistant', '请先在「设置」中填写 API Key 后再开始对话。');
+        setTab('settings');
+        pushUiMessage('assistant', '请先在「设置」页填写 API Key 后再开始对话。');
         return;
       }
 
       busy.value = true;
+      chatAbort = new AbortController();
       pushUiMessage('user', userText);
       // 本轮对话追踪 ID：贯穿 tools/LLM/桥接全部埋点（runTurn 串行保证 current 唯一）
       const traceId = generateTraceId();
       setCurrentTrace(traceId);
       logEvent('info', 'chat', 'turn_start', userText);
       const assistantItem = pushUiMessage('assistant', '');
+      const signal = chatAbort.signal;
 
       try {
         // 每轮发送前刷新工具清单，保证页面工具变化（listChanged）能被感知
@@ -149,18 +185,25 @@ export const App = defineComponent({
           },
           {
             onEvent: (event) => applyEvent(assistantItem, event),
+            signal,
           }
         );
         assistantItem.content = result.text;
         history = result.transcript;
         logEvent('info', 'chat', 'turn_end', result.text);
       } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
-        assistantItem.content = `出错了：${message}`;
-        logEvent('error', 'chat', 'turn_error', message);
+        if (error instanceof AgentAbortError || signal.aborted) {
+          assistantItem.content = '已终止本轮对话（未完成）。';
+          logEvent('info', 'chat', 'turn_aborted');
+        } else {
+          const message = error instanceof Error ? error.message : String(error);
+          assistantItem.content = `出错了：${message}`;
+          logEvent('error', 'chat', 'turn_error', message);
+        }
       } finally {
         clearCurrentTrace();
         busy.value = false;
+        chatAbort = null;
       }
     };
 
@@ -188,19 +231,31 @@ export const App = defineComponent({
 
     const send = async (): Promise<void> => {
       const userText = input.value.trim();
-      if (busy.value || userText.length === 0 || !pageTools) return;
+      if (locked.value || userText.length === 0 || !pageTools) return;
       input.value = '';
       await runTurn(userText);
     };
 
-    /** 调试 Tab「发送到对话」：把执行记录组装成预设消息交给 agent 继续分析。 */
+    /** 调试页「发送到对话」：把执行记录组装成预设消息交给 agent 继续分析。 */
     const handleHandoff = async (run: DebugRun): Promise<void> => {
-      if (busy.value) return;
-      activeTab.value = 'chat';
+      if (locked.value) return;
+      setTab('chat');
       await runTurn(composeHandoffMessage(run));
     };
 
-    /** 设置面板「快速切换调试模式」：立即持久化并生效，不等「保存」按钮。 */
+    /** 全局「终止」：终止 agent 对话（AbortSignal）+ 停止等待 relay 调用。 */
+    const terminate = (): void => {
+      if (busy.value) {
+        chatAbort?.abort();
+        logEvent('info', 'chat', 'turn_abort_requested');
+      }
+      if (relayRunningCount.value > 0) {
+        relayTerminated.value = true;
+        logEvent('info', 'relay', 'invoke_wait_terminated', `${String(relayRunningCount.value)} 个调用停止等待`);
+      }
+    };
+
+    /** 设置页「快速切换调试模式」：立即持久化并生效，不等「保存」按钮。 */
     const toggleDebugMode = async (): Promise<void> => {
       settings.debugMode = !settings.debugMode;
       await saveSettings({
@@ -212,12 +267,8 @@ export const App = defineComponent({
       });
       logEvent('info', 'app', 'debug_mode_toggled', settings.debugMode ? 'on' : 'off');
       if (settings.debugMode) {
-        // 开启：关闭设置面板并直达调试 Tab（一键入口的核心诉求）
-        showSettings.value = false;
-        activeTab.value = 'debug';
-      } else if (activeTab.value === 'debug') {
-        // 关闭：若停留在调试 Tab 则切回对话，设置面板保持打开
-        activeTab.value = 'chat';
+        // 开启：直达 tools 调试页（一键入口的核心诉求）
+        setTab('debug');
       }
     };
 
@@ -231,9 +282,7 @@ export const App = defineComponent({
       });
       // 控制台输出开关立即生效（保存后无需重开侧栏）
       setConsoleOutput(settings.consoleOutput);
-      // 关闭调试模式时若停留在调试 Tab，切回对话
-      if (!settings.debugMode && activeTab.value === 'debug') activeTab.value = 'chat';
-      showSettings.value = false;
+      setTab('chat');
       pushUiMessage(
         'assistant',
         settings.consoleOutput
@@ -243,7 +292,7 @@ export const App = defineComponent({
       await refreshTools();
     };
 
-    /** 本地日志区块状态（设置面板内）。 */
+    /** 本地日志区块状态（设置页内）。 */
     const logCountText = ref('');
     const logHint = ref('');
 
@@ -269,9 +318,9 @@ export const App = defineComponent({
       await refreshLogCount();
     };
 
-    // 打开设置面板时刷新日志条数展示
-    watch(showSettings, (visible) => {
-      if (visible) {
+    // 进入设置页时刷新日志条数展示
+    watch(activeTab, (tab) => {
+      if (tab === 'settings') {
         logHint.value = '';
         void refreshLogCount();
       }
@@ -288,6 +337,8 @@ export const App = defineComponent({
       settings.debugMode = loaded.debugMode;
       settings.consoleOutput = loaded.consoleOutput;
       setConsoleOutput(loaded.consoleOutput);
+      // 调试模式：侧栏打开时默认进入 tools 调试页
+      if (settings.debugMode) activeTab.value = 'debug';
 
       pageTools = connectPageTools();
       pageToolsRef.value = pageTools;
@@ -303,9 +354,12 @@ export const App = defineComponent({
         void refreshTools();
       });
 
-      // relay 连接状态订阅：连接/变更快照 → 状态栏 + 日志管线
+      // relay 连接状态 + 调用日志订阅：状态栏 / relay 调用页 / 日志管线
       relayStatusClient = connectRelayStatus();
       unsubscribeRelayStatus = relayStatusClient.onUpdate(applyRelayStatuses);
+      unsubscribeInvokeLogs = relayStatusClient.onInvokeLogs((entries) => {
+        invokeLogs.value = entries;
+      });
 
       await refreshTools();
     });
@@ -314,6 +368,7 @@ export const App = defineComponent({
       unsubscribeStatus?.();
       unsubscribeToolsChange?.();
       unsubscribeRelayStatus?.();
+      unsubscribeInvokeLogs?.();
       relayStatusClient?.disconnect();
       pageTools?.disconnect();
       pageTools = null;
@@ -327,33 +382,23 @@ export const App = defineComponent({
           connected: connected.value,
           toolsCount: toolsCount.value,
           onToggleSettings: () => {
-            showSettings.value = !showSettings.value;
+            setTab('settings');
           },
         }),
         h(RelayStatusBar, { statuses: relayStatuses.value }),
-        settings.debugMode
-          ? h(TabBar, {
-              activeTab: activeTab.value,
-              'onUpdate:activeTab': (value: 'chat' | 'debug') => {
-                activeTab.value = value;
-              },
-            })
-          : null,
-        showSettings.value
-          ? h(SettingsPanel, {
-              settings,
-              busy: busy.value,
-              logCountText: logCountText.value,
-              logHint: logHint.value,
-              onSave: () => void persistSettings(),
-              onToggleDebug: () => void toggleDebugMode(),
-              onExportLogs: () => void handleExportLogs(),
-              onClearLogs: () => void handleClearLogs(),
-            })
-          : null,
+        h(TabBar, {
+          activeTab: activeTab.value,
+          locked: locked.value,
+          phaseLabel: phaseLabel.value,
+          'onUpdate:activeTab': (value: PanelPage) => {
+            setTab(value);
+          },
+          onAbort: () => terminate(),
+        }),
         h(ChatPage, {
           messages: messages.value,
           busy: busy.value,
+          locked: locked.value,
           active: activeTab.value === 'chat',
           modelValue: input.value,
           'onUpdate:modelValue': (value: string) => {
@@ -361,15 +406,34 @@ export const App = defineComponent({
           },
           onSend: () => void send(),
         }),
-        settings.debugMode && pageToolsRef.value
+        pageToolsRef.value
           ? h(DebugPage, {
               pageTools: pageToolsRef.value,
               active: activeTab.value === 'debug',
+              locked: locked.value,
               onHandoff: (run: DebugRun) => {
                 void handleHandoff(run);
               },
             })
           : null,
+        h(RelayPage, {
+          active: activeTab.value === 'relay',
+          statuses: relayStatuses.value,
+          invokeLogs: invokeLogs.value,
+          runningCount: relayRunningCount.value,
+          terminated: relayTerminated.value,
+        }),
+        h(SettingsPage, {
+          active: activeTab.value === 'settings',
+          settings,
+          busy: locked.value,
+          logCountText: logCountText.value,
+          logHint: logHint.value,
+          onSave: () => void persistSettings(),
+          onToggleDebug: () => void toggleDebugMode(),
+          onExportLogs: () => void handleExportLogs(),
+          onClearLogs: () => void handleClearLogs(),
+        }),
       ]);
   },
 });

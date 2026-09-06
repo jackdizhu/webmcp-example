@@ -17,8 +17,13 @@ export const DebugPage = defineComponent({
   name: 'DebugPage',
   props: {
     pageTools: { type: Object as () => PageToolsClient, required: true },
-    /** 调试 Tab 是否处于激活状态（激活时刷新工具清单；非激活时仅隐藏布局）。 */
+    /** 调试页是否处于激活状态（激活时刷新工具清单；非激活时仅隐藏布局）。 */
     active: { type: Boolean, required: true },
+    /**
+     * 执行锁（agent 对话或 relay 调用进行中）：本页全部操作禁用，
+     * 避免与其他执行流并发造成页面工具调用状态错乱。
+     */
+    locked: { type: Boolean, default: false },
   },
   emits: {
     /** 用户点击「发送到对话」，把一次执行记录交给 agent 继续分析。 */
@@ -75,7 +80,7 @@ export const DebugPage = defineComponent({
     };
 
     const execute = async (): Promise<void> => {
-      if (running.value || selected.value.length === 0) return;
+      if (running.value || props.locked || selected.value.length === 0) return;
       const check = validateArgsText(argsText.value);
       if (!check.ok) {
         validationError.value = check.error;
@@ -142,7 +147,7 @@ export const DebugPage = defineComponent({
             'select',
             {
               value: selected.value,
-              disabled: running.value || tools.value.length === 0,
+              disabled: running.value || props.locked || tools.value.length === 0,
               onChange: (event: Event) => {
                 selected.value = (event.target as HTMLSelectElement).value;
               },
@@ -162,6 +167,7 @@ export const DebugPage = defineComponent({
             rows: 5,
             placeholder: '{"key": "value"}；留空视为 {}',
             spellcheck: false,
+            disabled: running.value || props.locked,
             value: argsText.value,
             onInput: (event: Event) => {
               argsText.value = (event.target as HTMLTextAreaElement).value;
@@ -177,13 +183,13 @@ export const DebugPage = defineComponent({
             'button',
             {
               type: 'button',
-              disabled: running.value || selected.value.length === 0,
+              disabled: running.value || props.locked || selected.value.length === 0,
               onClick: () => void execute(),
             },
             running.value ? '执行中…' : '执行'
           ),
-          h('button', { class: 'ghost', type: 'button', disabled: running.value, onClick: formatArgs }, '格式化'),
-          h('button', { class: 'ghost', type: 'button', disabled: refreshing.value, onClick: () => void refreshTools() }, '刷新工具'),
+          h('button', { class: 'ghost', type: 'button', disabled: running.value || props.locked, onClick: formatArgs }, '格式化'),
+          h('button', { class: 'ghost', type: 'button', disabled: running.value || props.locked, onClick: () => void refreshTools() }, '刷新工具'),
         ]),
       ]);
     };

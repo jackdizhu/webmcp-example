@@ -4,7 +4,9 @@
 // tabs.connect → content script 方向相反）；连接本身会唤醒 SW。
 // 断线自动重连：SW 休眠/重启后 Port 断开，按指数退避重连，重连成功即收到新快照。
 import {
+  applyInvokeLogEvent,
   RELAY_STATUS_PORT_NAME,
+  type RelayInvokeLogEntry,
   type RelayStatusMessage,
   type RelayTabStatus,
 } from '../../core/relay-status-protocol';
@@ -14,6 +16,10 @@ export interface RelayStatusClient {
   getStatuses(): RelayTabStatus[];
   /** 快照更新回调（连接建立即触发一次，返回取消订阅函数）。 */
   onUpdate(listener: (statuses: RelayTabStatus[]) => void): () => void;
+  /** relay 调用日志缓冲（连接建立时以 SW 快照对齐，此后增量合并）。 */
+  getInvokeLogs(): RelayInvokeLogEntry[];
+  /** 调用日志变化回调（快照对齐或增量事件后触发，参数为最新全量数组）。 */
+  onInvokeLogs(listener: (entries: RelayInvokeLogEntry[]) => void): () => void;
   /** 主动断开（侧边栏卸载时调用）。 */
   disconnect(): void;
 }
@@ -41,13 +47,21 @@ export function connectRelayStatus(
   let port: chrome.runtime.Port | null = null;
   let disposed = false;
   let statuses: RelayTabStatus[] = [];
+  let invokeLogs: RelayInvokeLogEntry[] = [];
   let reconnectDelayMs = RECONNECT_DELAY_INITIAL_MS;
   let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   const listeners = new Set<(statuses: RelayTabStatus[]) => void>();
+  const invokeLogListeners = new Set<(entries: RelayInvokeLogEntry[]) => void>();
 
   const notify = (): void => {
     for (const listener of listeners) {
       listener(statuses);
+    }
+  };
+
+  const notifyInvokeLogs = (): void => {
+    for (const listener of invokeLogListeners) {
+      listener(invokeLogs);
     }
   };
 
@@ -80,6 +94,21 @@ export function connectRelayStatus(
         statuses = msg.statuses;
         reconnectDelayMs = RECONNECT_DELAY_INITIAL_MS;
         notify();
+        return;
+      }
+      if (typeof msg === 'object' && msg !== null && msg.type === 'invoke-logs') {
+        // 全量对齐：以 SW 环形缓冲为准（重连后去重，直接替换）
+        if (Array.isArray(msg.entries)) {
+          invokeLogs = msg.entries.map((entry) => ({ ...entry }));
+          notifyInvokeLogs();
+        }
+        return;
+      }
+      if (typeof msg === 'object' && msg !== null && msg.type === 'invoke-log') {
+        if (msg.phase === 'started' || msg.phase === 'finished') {
+          invokeLogs = applyInvokeLogEvent(invokeLogs, msg.phase, msg.entry);
+          notifyInvokeLogs();
+        }
       }
     });
     fresh.onDisconnect.addListener(() => {
@@ -114,6 +143,14 @@ export function connectRelayStatus(
       listener(statuses);
       return () => {
         listeners.delete(listener);
+      };
+    },
+    getInvokeLogs: () => invokeLogs.map((entry) => ({ ...entry })),
+    onInvokeLogs(listener) {
+      invokeLogListeners.add(listener);
+      listener(invokeLogs);
+      return () => {
+        invokeLogListeners.delete(listener);
       };
     },
     disconnect() {

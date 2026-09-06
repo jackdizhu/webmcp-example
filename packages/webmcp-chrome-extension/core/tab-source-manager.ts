@@ -12,7 +12,10 @@ import {
   type PageToolsResponse,
 } from './page-tools-bridge';
 import {
+  applyInvokeLogEvent,
   RELAY_STATUS_PORT_NAME,
+  type RelayInvokeLogEntry,
+  type RelayInvokeLogPhase,
   type RelayStatusMessage,
   type RelayStatusRequest,
   type RelayTabStatus,
@@ -357,12 +360,19 @@ interface TabEntry {
  * 启动标签页源编排。返回：
  * - stop()：释放全部监听与连接（扩展卸载/SW 测试收尾用）；
  * - getStatuses()：当前全部标签页 relay 连接状态快照；
- * - onStatusChange(listener)：任一标签页状态变化时推送全量快照（侧栏展示用）。
+ * - onStatusChange(listener)：任一标签页状态变化时推送全量快照（侧栏展示用）；
+ * - getInvokeLogs()：relay 工具调用日志环形缓冲（最近 INVOKE_LOG_CAP 条）；
+ * - onInvokeLog(listener)：单次调用 started/finished 事件订阅；
+ * - recordInvokeLog(phase, entry)：写入一条调用日志（默认 clientFactory 已接
+ *   RelaySourceClient 回调；测试或自定义工厂可直接调用注入）。
  */
 export function startTabSourceManager(options: TabSourceManagerOptions = {}): {
   stop(): void;
   getStatuses(): RelayTabStatus[];
   onStatusChange(listener: (statuses: RelayTabStatus[]) => void): () => void;
+  getInvokeLogs(): RelayInvokeLogEntry[];
+  onInvokeLog(listener: (phase: RelayInvokeLogPhase, entry: RelayInvokeLogEntry) => void): () => void;
+  recordInvokeLog(phase: RelayInvokeLogPhase, entry: RelayInvokeLogEntry): void;
 } {
   const tabsApi = options.tabsApi ?? defaultTabsApi();
   const tabFilter = options.tabFilter ?? isHttpUrl;
@@ -378,6 +388,23 @@ export function startTabSourceManager(options: TabSourceManagerOptions = {}): {
   const recreateAttempts = new Map<number, number>();
   /** 待执行的自愈定时器（stop 时清理；导航完成时取消）。 */
   const healTimers = new Map<number, ReturnType<typeof setTimeout>>();
+
+  // relay 调用日志：环形缓冲 + 订阅（侧栏「relay 调用」页只读展示的数据源）
+  let invokeLogs: RelayInvokeLogEntry[] = [];
+  const invokeLogListeners = new Set<
+    (phase: RelayInvokeLogPhase, entry: RelayInvokeLogEntry) => void
+  >();
+
+  const recordInvokeLog = (phase: RelayInvokeLogPhase, entry: RelayInvokeLogEntry): void => {
+    invokeLogs = applyInvokeLogEvent(invokeLogs, phase, entry);
+    for (const listener of invokeLogListeners) {
+      try {
+        listener(phase, { ...entry });
+      } catch (error) {
+        console.warn('[webmcp-relay-source] invoke-log listener threw:', error);
+      }
+    }
+  };
 
   const snapshotStatuses = (): RelayTabStatus[] => [...statuses.values()].map((status) => ({ ...status }));
 
@@ -434,6 +461,9 @@ export function startTabSourceManager(options: TabSourceManagerOptions = {}): {
           void tabsApi.reload(input.tabId).catch((error: unknown) => {
             console.warn(`[webmcp-relay-source] tabs.reload(${String(input.tabId)}) failed:`, error);
           });
+        },
+        onInvokeLog: (phase, draft) => {
+          recordInvokeLog(phase, { ...draft, tabId: input.tabId });
         },
       });
     });
@@ -657,18 +687,29 @@ export function startTabSourceManager(options: TabSourceManagerOptions = {}): {
         statusListeners.delete(listener);
       };
     },
+    getInvokeLogs: () => invokeLogs.map((entry) => ({ ...entry })),
+    onInvokeLog: (listener) => {
+      invokeLogListeners.add(listener);
+      return () => {
+        invokeLogListeners.delete(listener);
+      };
+    },
+    recordInvokeLog,
   };
 }
 
 /**
  * 状态展示端口服务：侧边栏（扩展页面）通过 chrome.runtime.connect({name})
  * 建立长连接，SW 立即下发全量快照，此后任一标签页状态变化都推送更新。
+ * 同时推送 relay 工具调用日志（invoke-logs 全量 + invoke-log 增量）。
  * runtime API 可注入（测试用桩）。
  */
 export function startRelayStatusPort(
   manager: {
     getStatuses(): RelayTabStatus[];
     onStatusChange(listener: (statuses: RelayTabStatus[]) => void): () => void;
+    getInvokeLogs?(): RelayInvokeLogEntry[];
+    onInvokeLog?(listener: (phase: RelayInvokeLogPhase, entry: RelayInvokeLogEntry) => void): () => void;
   },
   runtimeApi: Pick<typeof chrome.runtime, 'onConnect'> = chrome.runtime
 ): { stop(): void } {
@@ -684,8 +725,15 @@ export function startRelayStatusPort(
       }
     };
     send({ type: 'snapshot', statuses: manager.getStatuses() });
+    const invokeLogs = manager.getInvokeLogs?.();
+    if (invokeLogs) {
+      send({ type: 'invoke-logs', entries: invokeLogs });
+    }
     const unsubscribe = manager.onStatusChange((statuses) => {
       send({ type: 'update', statuses });
+    });
+    const unsubscribeInvokeLog = manager.onInvokeLog?.((phase, entry) => {
+      send({ type: 'invoke-log', phase, entry });
     });
     port.onMessage.addListener((raw: unknown) => {
       const message = raw as Partial<RelayStatusRequest>;
@@ -699,6 +747,7 @@ export function startRelayStatusPort(
     });
     port.onDisconnect.addListener(() => {
       unsubscribe();
+      unsubscribeInvokeLog?.();
     });
   };
   runtimeApi.onConnect.addListener(onConnect);

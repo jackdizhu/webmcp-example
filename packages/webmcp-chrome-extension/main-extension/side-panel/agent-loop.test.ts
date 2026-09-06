@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
+  AgentAbortError,
   runAgentLoop,
   type AgentLoopEvent,
   type AgentTool,
@@ -126,5 +127,60 @@ describe('runAgentLoop', () => {
     }, { maxIterations: 1 });
 
     expect(result.text).toContain('迭代上限');
+  });
+
+  it('signal 已中止时抛 AgentAbortError 且不发起 LLM 请求', async () => {
+    const llm = scriptedLlm([{ role: 'assistant', content: '不应到达' }]);
+    const executeTool = vi.fn();
+    const controller = new AbortController();
+    controller.abort();
+
+    await expect(
+      runAgentLoop(historyOf({ role: 'user', content: '被终止' }), tools, { llm, executeTool }, {
+        signal: controller.signal,
+      })
+    ).rejects.toThrow(AgentAbortError);
+    expect(llm.calls).toHaveLength(0);
+    expect(executeTool).not.toHaveBeenCalled();
+  });
+
+  it('工具执行中终止：当前调用完成后停止，不再继续下一轮', async () => {
+    const llm = scriptedLlm([
+      { role: 'assistant', content: '', toolCalls: [{ id: 'c5', function: { name: 'get_status', arguments: '{}' } }] },
+      { role: 'assistant', content: '不应到达' },
+    ]);
+    const executeTool = vi.fn(async () => {
+      // 工具执行期间用户点「终止」
+      controller.abort();
+      return { ok: true };
+    });
+    const controller = new AbortController();
+
+    await expect(
+      runAgentLoop(historyOf({ role: 'user', content: '执行一半被终止' }), tools, { llm, executeTool }, {
+        signal: controller.signal,
+      })
+    ).rejects.toThrow(AgentAbortError);
+    // 工具调用完成了，但不再发起第二次 LLM 请求
+    expect(executeTool).toHaveBeenCalledTimes(1);
+    expect(llm.calls).toHaveLength(1);
+  });
+
+  it('signal 透传给 LLM 客户端（fetch 中断用）', async () => {
+    const seenSignals: Array<AbortSignal | undefined> = [];
+    const llm: LlmChatClient = {
+      async complete(_messages, _tools, signal) {
+        seenSignals.push(signal);
+        return { role: 'assistant', content: 'done' };
+      },
+    };
+    const controller = new AbortController();
+
+    const result = await runAgentLoop(historyOf({ role: 'user', content: 'hi' }), tools, { llm, executeTool: vi.fn() }, {
+      signal: controller.signal,
+    });
+
+    expect(result.text).toBe('done');
+    expect(seenSignals[0]).toBe(controller.signal);
   });
 });

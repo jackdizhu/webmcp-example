@@ -56,7 +56,7 @@ export const SettingsPanel = defineComponent({
         textInput('API Key', 'apiKey', { type: 'password', placeholder: 'sk-...', autocomplete: 'off' }),
         textInput('Base URL', 'baseUrl', { type: 'text', placeholder: 'https://api.deepseek.com/v1' }),
         textInput('模型', 'model', { type: 'text', placeholder: 'deepseek-chat' }),
-        checkbox('debugMode', '调试模式（开启「调试」Tab，可不经 LLM 手动执行工具）'),
+        checkbox('debugMode', '调试模式（侧栏打开时默认进入「tools 调试」页）'),
         // 快速切换：无 Key 用户的一键直达入口（立即生效，不依赖「保存」按钮）
         h(
           'button',

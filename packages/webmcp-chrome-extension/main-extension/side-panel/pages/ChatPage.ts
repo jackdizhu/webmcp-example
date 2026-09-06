@@ -11,7 +11,12 @@ export const ChatPage = defineComponent({
   props: {
     messages: { type: Array as PropType<UiMessage[]>, required: true },
     busy: { type: Boolean, required: true },
-    /** 对话 Tab 是否激活（非激活时仅隐藏布局，保留滚动位置）。 */
+    /**
+     * 执行锁（agent 对话或 relay 调用进行中）：输入与发送禁用。
+     * 消息列表的「处理中」提示仍由 busy 驱动（relay 调用执行中不误导）。
+     */
+    locked: { type: Boolean, required: true },
+    /** 对话页是否激活（非激活时仅隐藏布局，保留滚动位置）。 */
     active: { type: Boolean, required: true },
     /** 输入框内容（v-model 双向绑定到 App）。 */
     modelValue: { type: String, required: true },
@@ -26,7 +31,7 @@ export const ChatPage = defineComponent({
         h(MessageList, { messages: props.messages, busy: props.busy }),
         h(Composer, {
           modelValue: props.modelValue,
-          busy: props.busy,
+          busy: props.busy || props.locked,
           'onUpdate:modelValue': (value: string) => emit('update:modelValue', value),
           onSend: () => emit('send'),
         }),

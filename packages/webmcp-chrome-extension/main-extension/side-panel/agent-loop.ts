@@ -36,7 +36,11 @@ export interface ChatMessage {
 
 /** LLM 客户端接口（由 llm-client.ts 提供 OpenAI 兼容实现，测试可注入桩）。 */
 export interface LlmChatClient {
-  complete(messages: readonly ChatMessage[], tools: readonly AgentTool[]): Promise<ChatMessage>;
+  complete(
+    messages: readonly ChatMessage[],
+    tools: readonly AgentTool[],
+    signal?: AbortSignal
+  ): Promise<ChatMessage>;
 }
 
 /** 循环过程事件，供 UI 实时展示工具执行进度。 */
@@ -53,6 +57,14 @@ export interface AgentLoopDeps {
   executeTool: (name: string, args: Record<string, unknown>) => Promise<unknown>;
 }
 
+/** 循环被终止时抛出（侧栏据此把本轮消息标记为「已终止」而非报错）。 */
+export class AgentAbortError extends Error {
+  constructor() {
+    super('本轮对话已被用户终止');
+    this.name = 'AgentAbortError';
+  }
+}
+
 /** 循环选项。 */
 export interface AgentLoopOptions {
   /** 系统提示词，缺省使用内置的页面工具验证助手提示。 */
@@ -61,6 +73,11 @@ export interface AgentLoopOptions {
   maxIterations?: number;
   /** 过程事件回调。 */
   onEvent?: (event: AgentLoopEvent) => void;
+  /**
+   * 终止信号：每次 LLM 调用与工具执行前检查，已中止则抛 AgentAbortError
+   * 并停止后续迭代（正在执行的页面工具调用无法真正中断，等待其完成后停止）。
+   */
+  signal?: AbortSignal;
 }
 
 export const DEFAULT_SYSTEM_PROMPT =
@@ -103,15 +120,24 @@ export async function runAgentLoop(
   const systemPrompt = options.systemPrompt ?? DEFAULT_SYSTEM_PROMPT;
   const maxIterations = options.maxIterations ?? 8;
   const onEvent = options.onEvent ?? (() => {});
+  const signal = options.signal;
+
+  const throwIfAborted = (): void => {
+    if (signal?.aborted) {
+      throw new AgentAbortError();
+    }
+  };
 
   const internal: ChatMessage[] = [...history];
   // transcript 与 internal 同构但不含 system（system 在请求时临时拼接）。
   const transcript: ChatMessage[] = [...internal];
 
   for (let iteration = 1; iteration <= maxIterations; iteration += 1) {
+    throwIfAborted();
     onEvent({ type: 'llm_call', iteration });
     const messages: ChatMessage[] = [{ role: 'system', content: systemPrompt }, ...internal];
-    const assistant = await deps.llm.complete(messages, tools);
+    const assistant = await deps.llm.complete(messages, tools, signal);
+    throwIfAborted();
     internal.push(assistant);
     transcript.push(assistant);
 
@@ -122,6 +148,7 @@ export async function runAgentLoop(
 
     // assistant 消息无文本时协议要求 content 允许为空串，保持显式空串即可。
     for (const call of toolCalls) {
+      throwIfAborted();
       onEvent({ type: 'tool_start', name: call.function.name });
       const args = parseToolArgs(call.function.arguments);
       let toolContent: string;

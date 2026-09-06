@@ -74,7 +74,7 @@ export function toWireTools(tools: readonly AgentTool[]): Array<{
  */
 export function createOpenAiCompatClient(config: LlmConfig, fetchImpl: typeof fetch = fetch): LlmChatClient {
   return {
-    async complete(messages, tools) {
+    async complete(messages, tools, signal) {
       const url = `${config.baseUrl.replace(/\/+$/, '')}/chat/completions`;
       const body: Record<string, unknown> = {
         model: config.model,
@@ -100,6 +100,8 @@ export function createOpenAiCompatClient(config: LlmConfig, fetchImpl: typeof fe
             Authorization: `Bearer ${config.apiKey}`,
           },
           body: JSON.stringify(body),
+          // 用户终止时中断请求（AbortError 由 agent-loop 统一转义为已终止语义）
+          ...(signal ? { signal } : {}),
         });
       } catch (error) {
         logEvent('error', 'llm', 'llm_error', {
