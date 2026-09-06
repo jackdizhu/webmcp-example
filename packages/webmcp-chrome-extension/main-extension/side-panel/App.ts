@@ -29,7 +29,7 @@ import {
   type PanelSettings,
 } from './panel-client';
 import { connectRelayStatus } from './relay-status-client';
-import type { RelayInvokeLogEntry, RelayTabStatus } from '../../core/relay-status-protocol';
+import type { RelayInvokeLogEntry, RelayTabSelection, RelayTabStatus } from '../../core/relay-status-protocol';
 import { AppHeader } from './components/AppHeader';
 import { RelayStatusBar } from './components/RelayStatusBar';
 import { TabBar, type PanelPage } from './components/TabBar';
@@ -68,6 +68,7 @@ export const App = defineComponent({
     let relayStatusClient: ReturnType<typeof connectRelayStatus> | null = null;
     let unsubscribeRelayStatus: (() => void) | null = null;
     let unsubscribeInvokeLogs: (() => void) | null = null;
+    let unsubscribeRelaySelection: (() => void) | null = null;
     /** 各标签页上一次的连接状态（diff 出迁移事件写日志）。 */
     const relayStateCache = new Map<number, string>();
     // agent 循环的多轮对话历史（不含 system 消息），跨轮次保留上下文
@@ -217,6 +218,24 @@ export const App = defineComponent({
     };
 
     const relayStatuses = ref<RelayTabStatus[]>([]);
+    /** 标签页数据源选择（SW 推送；自动模式单选活动页签 / 手动 checkbox 集合）。 */
+    const relaySelection = ref<RelayTabSelection>({ mode: 'auto', tabIds: [] });
+
+    /** relay 页 checkbox 勾选：合并出新选中集发给 SW（未选中的页签数据过滤不传递）。 */
+    const toggleRelayTab = (tabId: number, checked: boolean): void => {
+      if (!relayStatusClient) return;
+      const next = new Set(relaySelection.value.tabIds);
+      if (checked) next.add(tabId);
+      else next.delete(tabId);
+      relayStatusClient.sendRequest({ type: 'set-selection', tabIds: [...next] });
+      logEvent('info', 'relay', 'relay_selection_toggle', `tab ${String(tabId)} → ${checked ? 'selected' : 'deselected'}`);
+    };
+
+    /** relay 页「恢复默认」：回到自动模式（仅当前活动页签，单选）。 */
+    const resetRelaySelection = (): void => {
+      relayStatusClient?.sendRequest({ type: 'set-selection', tabIds: null });
+      logEvent('info', 'relay', 'relay_selection_reset', 'auto');
+    };
 
     /** relay 状态快照落 UI，并把逐 tab 的状态迁移写入日志管线（可导出排查）。 */
     const applyRelayStatuses = (statuses: RelayTabStatus[]): void => {
@@ -364,11 +383,14 @@ export const App = defineComponent({
         void refreshTools();
       });
 
-      // relay 连接状态 + 调用日志订阅：状态栏 / relay 调用页 / 日志管线
+      // relay 连接状态 + 调用日志 + 标签页选择订阅：状态栏 / relay 调用页 / 日志管线
       relayStatusClient = connectRelayStatus();
       unsubscribeRelayStatus = relayStatusClient.onUpdate(applyRelayStatuses);
       unsubscribeInvokeLogs = relayStatusClient.onInvokeLogs((entries) => {
         invokeLogs.value = entries;
+      });
+      unsubscribeRelaySelection = relayStatusClient.onSelectionChange((selection) => {
+        relaySelection.value = selection;
       });
 
       await refreshTools();
@@ -379,6 +401,7 @@ export const App = defineComponent({
       unsubscribeToolsChange?.();
       unsubscribeRelayStatus?.();
       unsubscribeInvokeLogs?.();
+      unsubscribeRelaySelection?.();
       relayStatusClient?.disconnect();
       pageTools?.disconnect();
       pageTools = null;
@@ -430,9 +453,12 @@ export const App = defineComponent({
         h(RelayPage, {
           active: activeTab.value === 'relay',
           statuses: relayStatuses.value,
+          selection: relaySelection.value,
           invokeLogs: invokeLogs.value,
           runningCount: relayRunningCount.value,
           terminated: relayTerminated.value,
+          onToggleTab: toggleRelayTab,
+          onResetSelection: resetRelaySelection,
         }),
         h(SettingsPage, {
           active: activeTab.value === 'settings',

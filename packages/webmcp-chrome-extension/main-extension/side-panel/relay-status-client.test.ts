@@ -1,4 +1,5 @@
-// relay-status-client 单测：状态快照 + 调用日志（invoke-logs 全量对齐 / invoke-log 增量合并）。
+// relay-status-client 单测：状态快照 + 调用日志（invoke-logs 全量对齐 / invoke-log 增量合并）
+// + 标签页数据源选择（selection 推送）。
 import { describe, expect, it, vi } from 'vitest';
 
 import type { RelayInvokeLogEntry, RelayStatusMessage } from '../../core/relay-status-protocol';
@@ -99,6 +100,45 @@ describe('connectRelayStatus 调用日志', () => {
 
     expect(client.getInvokeLogs()).toHaveLength(0);
     expect(listener).toHaveBeenCalledTimes(1); // 仅订阅时的初始通知
+    client.disconnect();
+  });
+});
+
+describe('connectRelayStatus 标签页数据源选择', () => {
+  it('selection 消息更新快照并通知监听器（订阅即收到当前值）', () => {
+    const port = new FakePort();
+    const client = connectRelayStatus(() => port as unknown as chrome.runtime.Port);
+    const seen: Array<{ mode: 'auto' | 'manual'; tabIds: number[] }> = [];
+    client.onSelectionChange((selection) => seen.push(selection));
+
+    port.emit({ type: 'selection', mode: 'manual', tabIds: [3, 5] });
+
+    expect(client.getSelection()).toEqual({ mode: 'manual', tabIds: [3, 5] });
+    expect(seen).toEqual([
+      { mode: 'auto', tabIds: [] }, // 订阅时的初始通知（默认自动模式空集）
+      { mode: 'manual', tabIds: [3, 5] },
+    ]);
+    client.disconnect();
+  });
+
+  it('畸形 selection 消息忽略，保持上一份快照；set-selection 请求经 sendRequest 发出', () => {
+    const port = new FakePort();
+    const client = connectRelayStatus(() => port as unknown as chrome.runtime.Port);
+    const listener = vi.fn();
+    client.onSelectionChange(listener);
+
+    port.emit({ type: 'selection', mode: 'weird', tabIds: [1] } as never);
+    port.emit({ type: 'selection', mode: 'manual', tabIds: 'oops' } as never);
+
+    expect(client.getSelection()).toEqual({ mode: 'auto', tabIds: [] });
+    expect(listener).toHaveBeenCalledTimes(1);
+
+    client.sendRequest({ type: 'set-selection', tabIds: [1, 2] });
+    client.sendRequest({ type: 'set-selection', tabIds: null });
+    expect(port.sent).toEqual([
+      { type: 'set-selection', tabIds: [1, 2] },
+      { type: 'set-selection', tabIds: null },
+    ]);
     client.disconnect();
   });
 });

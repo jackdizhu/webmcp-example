@@ -9,6 +9,17 @@ import type { RelayConnectionStatus } from './relay-source-client';
 /** 状态展示专用 Port 名（侧边栏 connect 与 SW onConnect 双方约定）。 */
 export const RELAY_STATUS_PORT_NAME = 'webmcp-relay-status';
 
+/** 标签页数据源选择（checkbox 多选；未选中的标签页不连 relay，数据过滤不传递）。 */
+export interface RelayTabSelection {
+  /**
+   * - auto：默认模式，仅选中当前活动标签页（单选），随标签页切换自动跟随；
+   * - manual：用户经侧栏 checkbox 勾选后的手动集合，不随活动页签切换变化。
+   */
+  mode: 'auto' | 'manual';
+  /** 选中标签页集合（空集 = 手动全不选，无数据传递）。 */
+  tabIds: number[];
+}
+
 /** 单个标签页的 relay 连接状态（连接状态 + 展示用元数据）。 */
 export interface RelayTabStatus extends RelayConnectionStatus {
   /** 真实 Chrome tabId。 */
@@ -17,6 +28,8 @@ export interface RelayTabStatus extends RelayConnectionStatus {
   url?: string;
   /** 页面标题。 */
   title?: string;
+  /** 是否被选中（选中 = 建立 relay 连接并暴露数据；未选中 = 过滤不传递）。 */
+  selected?: boolean;
 }
 
 /** 状态 Port 上的消息（SW → 侧边栏）。 */
@@ -28,7 +41,9 @@ export type RelayStatusMessage =
   /** 连接建立时的调用日志全量快照（环形缓冲，最近 INVOKE_LOG_CAP 条）。 */
   | { type: 'invoke-logs'; entries: RelayInvokeLogEntry[] }
   /** 单次调用的开始/结束事件（结束事件就地合并进同 callId 条目）。 */
-  | { type: 'invoke-log'; phase: RelayInvokeLogPhase; entry: RelayInvokeLogEntry };
+  | { type: 'invoke-log'; phase: RelayInvokeLogPhase; entry: RelayInvokeLogEntry }
+  /** 标签页数据源选择快照（连接建立、subscribe 与选择变化时推送）。 */
+  | { type: 'selection'; mode: RelayTabSelection['mode']; tabIds: number[] };
 
 /** 侧边栏 → SW 的消息。 */
 export type RelayStatusRequest =
@@ -49,6 +64,15 @@ export type RelayStatusRequest =
        * 关闭现有 WebSocket 并重新全范围发现握手，Port 保持不动。
        */
       type: 'relay-reconnect';
+    }
+  | {
+      /**
+       * 更新标签页数据源选择（relay 页 checkbox 多选）：
+       * - tabIds 为数组 → 手动模式，仅选中页签建立 relay 连接；
+       * - tabIds 为 null → 恢复默认自动模式（仅当前活动页签，单选）。
+       */
+      type: 'set-selection';
+      tabIds: number[] | null;
     };
 
 // ---- relay 调用日志（侧栏「relay 调用」页只读展示）----

@@ -18,6 +18,7 @@ import {
   type RelayInvokeLogPhase,
   type RelayStatusMessage,
   type RelayStatusRequest,
+  type RelayTabSelection,
   type RelayTabStatus,
 } from './relay-status-protocol';
 import {
@@ -111,6 +112,14 @@ export interface TabSourceManagerOptions {
     write(endpoint: RelayEndpoint): Promise<void>;
     clear(): Promise<void>;
   };
+  /**
+   * 标签页数据源选择存储（默认 chrome.storage.local 的 relayTabSelection 键）。
+   * 存储缺失 = 默认自动模式（仅当前活动页签，单选）。
+   */
+  selectionStore?: {
+    read(): Promise<RelayTabSelection | null>;
+    write(value: RelayTabSelection): Promise<void>;
+  };
   /** 标签页过滤（默认仅 http/https 页面；入参可能为 undefined，视为不过滤）。 */
   tabFilter?: (url: string | undefined) => boolean;
   /**
@@ -152,6 +161,10 @@ export interface TabsApi {
   }): Promise<Array<{ id?: number; url?: string; title?: string }>>;
   connect(tabId: number, connectInfo?: { name?: string }): chrome.runtime.Port;
   reload(tabId: number): Promise<void>;
+  onActivated: {
+    addListener(callback: (activeInfo: { tabId: number; windowId?: number }) => void): void;
+    removeListener(callback: (activeInfo: { tabId: number; windowId?: number }) => void): void;
+  };
   onUpdated: {
     addListener(
       callback: (tabId: number, changeInfo: { status?: string; url?: string }, tab: { id?: number; url?: string; title?: string }) => void
@@ -172,8 +185,34 @@ function defaultTabsApi(): TabsApi {
     query: (queryInfo) => chrome.tabs.query(queryInfo),
     connect: (tabId, connectInfo) => chrome.tabs.connect(tabId, connectInfo),
     reload: (tabId) => chrome.tabs.reload(tabId),
+    onActivated: chrome.tabs.onActivated,
     onUpdated: chrome.tabs.onUpdated,
     onRemoved: chrome.tabs.onRemoved,
+  };
+}
+
+/** chrome.storage.local 中标签页选择状态的键名。 */
+const SELECTION_STORAGE_KEY = 'relayTabSelection';
+
+function defaultSelectionStore() {
+  return {
+    read: async (): Promise<RelayTabSelection | null> => {
+      const stored = await chrome.storage.local.get([SELECTION_STORAGE_KEY]);
+      const value = stored[SELECTION_STORAGE_KEY];
+      if (
+        typeof value === 'object' &&
+        value !== null &&
+        ((value as RelayTabSelection).mode === 'auto' || (value as RelayTabSelection).mode === 'manual') &&
+        Array.isArray((value as RelayTabSelection).tabIds) &&
+        (value as RelayTabSelection).tabIds.every((id) => typeof id === 'number')
+      ) {
+        return value as RelayTabSelection;
+      }
+      return null;
+    },
+    write: async (value: RelayTabSelection): Promise<void> => {
+      await chrome.storage.local.set({ [SELECTION_STORAGE_KEY]: value });
+    },
   };
 }
 
@@ -390,6 +429,15 @@ export function startTabSourceManager(options: TabSourceManagerOptions = {}): {
   stop(): void;
   getStatuses(): RelayTabStatus[];
   onStatusChange(listener: (statuses: RelayTabStatus[]) => void): () => void;
+  /** 当前标签页数据源选择快照（自动模式单选活动页签 / 手动 checkbox 集合）。 */
+  getSelection(): RelayTabSelection;
+  /**
+   * 更新标签页数据源选择：数组 = 手动多选；null = 恢复默认自动模式
+   * （仅当前活动页签）。未选中的页签立即断开 relay 连接（数据过滤不传递）。
+   */
+  setSelection(tabIds: number[] | null): Promise<void>;
+  /** 选择变化订阅（订阅即收到一次当前快照）。 */
+  onSelectionChange(listener: (selection: RelayTabSelection) => void): () => void;
   getInvokeLogs(): RelayInvokeLogEntry[];
   onInvokeLog(listener: (phase: RelayInvokeLogPhase, entry: RelayInvokeLogEntry) => void): () => void;
   recordInvokeLog(phase: RelayInvokeLogPhase, entry: RelayInvokeLogEntry): void;
@@ -404,6 +452,7 @@ export function startTabSourceManager(options: TabSourceManagerOptions = {}): {
   const tabsApi = options.tabsApi ?? defaultTabsApi();
   const tabFilter = options.tabFilter ?? isHttpUrl;
   const endpointCache = options.endpointCache ?? defaultEndpointCache();
+  const selectionStore = options.selectionStore ?? defaultSelectionStore();
   const hostHint = options.hostHint ?? '127.0.0.1';
   const portHint = options.portHint ?? 9333;
 
@@ -415,6 +464,127 @@ export function startTabSourceManager(options: TabSourceManagerOptions = {}): {
   const recreateAttempts = new Map<number, number>();
   /** 待执行的自愈定时器（stop 时清理；导航完成时取消）。 */
   const healTimers = new Map<number, ReturnType<typeof setTimeout>>();
+
+  // ---- 标签页数据源选择（checkbox 多选；未选中不连 relay，数据过滤不传递）----
+  /** 全部可连接（http(s)）标签页清单：侧栏 checkbox 列表的数据源（含未选中页签）。 */
+  const inventory = new Map<number, { url?: string; title?: string }>();
+  /** 选择模式与选中集合（init 完成前 ensureClient 全部被门控，避免冷启动竞态连错页签）。 */
+  let selectionMode: RelayTabSelection['mode'] = 'auto';
+  let selectedTabIds = new Set<number>();
+  let selectionReady = false;
+  /** initSelection 完成承诺：setSelection 须等待其结束，避免默认选择覆盖用户设置。 */
+  let selectionInitPromise: Promise<void> = Promise.resolve();
+  const selectionListeners = new Set<(selection: RelayTabSelection) => void>();
+
+  const getSelection = (): RelayTabSelection => ({ mode: selectionMode, tabIds: [...selectedTabIds] });
+
+  const emitSelection = (): void => {
+    const snapshot = getSelection();
+    for (const listener of selectionListeners) {
+      try {
+        listener(snapshot);
+      } catch (error) {
+        console.warn('[webmcp-relay-source] selection listener threw:', error);
+      }
+    }
+  };
+
+  const persistSelection = async (): Promise<void> => {
+    try {
+      await selectionStore.write(getSelection());
+    } catch (error) {
+      console.warn('[webmcp-relay-source] selection persist failed:', error);
+    }
+  };
+
+  /**
+   * 按选中集合对齐连接：释放未选中的已连条目，建立选中且未连的条目；
+   * 随后持久化选择状态并推送快照。幂等，可重复调用。
+   */
+  async function reconcileSelection(): Promise<void> {
+    if (!selectionReady) {
+      return;
+    }
+    for (const tabId of [...entries.keys()]) {
+      if (!selectedTabIds.has(tabId)) {
+        disposeClient(tabId);
+      }
+    }
+    // 存储里可能残留已关闭标签页：get 失败即从选中集合清理
+    const stale: number[] = [];
+    for (const tabId of selectedTabIds) {
+      if (entries.has(tabId)) {
+        continue;
+      }
+      // 优先读 inventory（ensureClient 登记时已记录 url/title）：tabsApi.get 在
+      // 部分场景拿不到 URL 或失败，避免把仍存在的选中页签误判为 stale
+      const inv = inventory.get(tabId);
+      if (inv) {
+        ensureClient(tabId, inv.url, inv.title);
+        continue;
+      }
+      try {
+        const tab = await tabsApi.get(tabId);
+        if (tab.id === undefined) {
+          stale.push(tabId);
+          continue;
+        }
+        ensureClient(tab.id, tab.url, tab.title);
+      } catch {
+        stale.push(tabId);
+      }
+    }
+    for (const tabId of stale) {
+      selectedTabIds.delete(tabId);
+    }
+    await persistSelection();
+    emitSelection();
+    emitStatuses();
+  }
+
+  /** 启动时恢复选择状态：存储缺失/自动模式 → 默认仅选中当前活动标签页（单选）。 */
+  async function initSelection(): Promise<void> {
+    let stored: RelayTabSelection | null = null;
+    try {
+      stored = await selectionStore.read();
+    } catch (error) {
+      console.warn('[webmcp-relay-source] selection read failed:', error);
+    }
+    if (stored?.mode === 'manual') {
+      selectionMode = 'manual';
+      selectedTabIds = new Set(stored.tabIds);
+    } else {
+      selectionMode = 'auto';
+      selectedTabIds = new Set();
+    }
+    if (selectionMode === 'auto') {
+      const activeTabId = await getActiveTabId();
+      if (activeTabId !== null) {
+        selectedTabIds = new Set([activeTabId]);
+      }
+    }
+    selectionReady = true;
+    await reconcileSelection();
+  }
+
+  /**
+   * 更新标签页数据源选择（侧栏 checkbox 多选入口）：
+   * - tabIds 为数组 → 手动模式，仅选中页签建立 relay 连接；
+   * - tabIds 为 null → 恢复默认自动模式（仅当前活动页签，单选）。
+   */
+  async function setSelection(tabIds: number[] | null): Promise<void> {
+    // 启动竞态保护：initSelection 未完成时其默认选择会覆盖本次设置
+    await selectionInitPromise;
+    if (tabIds === null) {
+      selectionMode = 'auto';
+      const activeTabId = await getActiveTabId();
+      selectedTabIds = new Set(activeTabId !== null ? [activeTabId] : []);
+    } else {
+      selectionMode = 'manual';
+      selectedTabIds = new Set(tabIds);
+    }
+    await reconcileSelection();
+  }
 
   // relay 调用日志：环形缓冲 + 订阅（侧栏「relay 调用」页只读展示的数据源）
   let invokeLogs: RelayInvokeLogEntry[] = [];
@@ -433,7 +603,35 @@ export function startTabSourceManager(options: TabSourceManagerOptions = {}): {
     }
   };
 
-  const snapshotStatuses = (): RelayTabStatus[] => [...statuses.values()].map((status) => ({ ...status }));
+  /**
+   * 全量标签页快照：已连接条目用真实连接状态 + selected 标记；
+   * inventory 中未连接的 http(s) 页签合成 stopped 占位（侧栏 checkbox 列表数据源）。
+   */
+  const snapshotStatuses = (): RelayTabStatus[] => {
+    const out: RelayTabStatus[] = [];
+    const seen = new Set<number>();
+    for (const [tabId, status] of statuses) {
+      out.push({ ...status, tabId, selected: selectedTabIds.has(tabId) });
+      seen.add(tabId);
+    }
+    for (const [tabId, meta] of inventory) {
+      if (seen.has(tabId)) {
+        continue;
+      }
+      const next: RelayTabStatus = {
+        state: 'stopped',
+        endpoint: null,
+        toolsCount: 0,
+        updatedAt: 0,
+        tabId,
+        selected: selectedTabIds.has(tabId),
+      };
+      if (meta.url !== undefined) next.url = meta.url;
+      if (meta.title !== undefined) next.title = meta.title;
+      out.push(next);
+    }
+    return out;
+  };
 
   const emitStatuses = (): void => {
     const snapshot = snapshotStatuses();
@@ -592,6 +790,22 @@ export function startTabSourceManager(options: TabSourceManagerOptions = {}): {
       disposeClient(tabId);
       return;
     }
+    // 全量标签页清单：无论是否选中都记录（侧栏 checkbox 列表展示用）
+    const invMeta = inventory.get(tabId) ?? {};
+    if (url !== undefined) invMeta.url = url;
+    if (title !== undefined) invMeta.title = title;
+    inventory.set(tabId, invMeta);
+
+    // 选择门控：未选中的标签页不建立 SW→relay 连接 —— relay 端 list_sources /
+    // list_tools / invoke 获取不到其数据（过滤不传递）；已连接的条目立即释放。
+    if (!selectionReady || !selectedTabIds.has(tabId)) {
+      if (entries.has(tabId)) {
+        disposeClient(tabId);
+      } else {
+        emitStatuses();
+      }
+      return;
+    }
     if (entries.has(tabId)) {
       // 已有客户端：仅同步元数据（标题/URL 变化）
       const patch: Partial<RelaySourceMeta> = {};
@@ -696,15 +910,34 @@ export function startTabSourceManager(options: TabSourceManagerOptions = {}): {
     ensureClient(tabId, url, tab.title);
   };
 
+  const onActivated = (activeInfo: { tabId: number }): void => {
+    // 自动模式跟随当前活动标签页（默认单选）；手动模式选择不受切换影响
+    if (!selectionReady || selectionMode !== 'auto') {
+      return;
+    }
+    if (selectedTabIds.has(activeInfo.tabId)) {
+      return;
+    }
+    selectedTabIds = new Set([activeInfo.tabId]);
+    void reconcileSelection();
+  };
+
   const onRemoved = (tabId: number): void => {
+    inventory.delete(tabId);
+    // 已选中的标签页被关闭：从选中集合清理并持久化
+    if (selectedTabIds.delete(tabId)) {
+      void persistSelection();
+      emitSelection();
+    }
     disposeClient(tabId);
   };
 
   tabsApi.onUpdated.addListener(onUpdated);
   tabsApi.onRemoved.addListener(onRemoved);
+  tabsApi.onActivated.addListener(onActivated);
 
-  // SW 冷启动恢复：重扫已打开的 http(s) 标签页（SW 休眠会丢失内存态与连接，
-  // 各源客户端会按自身状态机重新发现 relay）
+  // SW 冷启动恢复：重扫已打开的 http(s) 标签页建立全量清单（未选中的只登记不连接，
+  // 选中的各源客户端按自身状态机重新发现 relay）
   void tabsApi
     .query({ url: RESCAN_URL_PATTERNS })
     .then((tabs) => {
@@ -726,6 +959,9 @@ export function startTabSourceManager(options: TabSourceManagerOptions = {}): {
     .catch((error: unknown) => {
       console.warn('[webmcp-relay-source] tab rescan failed:', error);
     });
+
+  // 恢复标签页数据源选择：默认仅当前活动页签（单选），手动多选来自侧栏 checkbox
+  selectionInitPromise = initSelection();
 
   /**
    * 手动重建指定标签页的连接（侧栏刷新按钮入口）：
@@ -777,6 +1013,7 @@ export function startTabSourceManager(options: TabSourceManagerOptions = {}): {
     stop: () => {
       tabsApi.onUpdated.removeListener(onUpdated);
       tabsApi.onRemoved.removeListener(onRemoved);
+      tabsApi.onActivated.removeListener(onActivated);
       for (const timer of healTimers.values()) {
         clearTimeout(timer);
       }
@@ -786,6 +1023,15 @@ export function startTabSourceManager(options: TabSourceManagerOptions = {}): {
       }
     },
     getStatuses: snapshotStatuses,
+    getSelection,
+    setSelection: (tabIds: number[] | null) => setSelection(tabIds),
+    onSelectionChange: (listener) => {
+      selectionListeners.add(listener);
+      listener(getSelection());
+      return () => {
+        selectionListeners.delete(listener);
+      };
+    },
     onStatusChange: (listener) => {
       statusListeners.add(listener);
       listener(snapshotStatuses());
@@ -829,6 +1075,12 @@ export function startRelayStatusPort(
     onInvokeLog?(listener: (phase: RelayInvokeLogPhase, entry: RelayInvokeLogEntry) => void): () => void;
     /** 手动刷新活动标签页连接（调试页「webmcp连接刷新 / relay连接刷新」按钮）。 */
     recreateConnectionForActive?(mode: 'webmcp' | 'relay'): Promise<boolean>;
+    /** 标签页数据源选择快照（缺失时侧栏不展示选择能力，向后兼容）。 */
+    getSelection?(): RelayTabSelection;
+    /** 更新标签页数据源选择（relay 页 checkbox 多选 / 恢复默认）。 */
+    setSelection?(tabIds: number[] | null): void | Promise<void>;
+    /** 选择变化订阅（变化时经状态端口推送 selection 消息）。 */
+    onSelectionChange?(listener: (selection: RelayTabSelection) => void): () => void;
   },
   runtimeApi: Pick<typeof chrome.runtime, 'onConnect'> = chrome.runtime
 ): { stop(): void } {
@@ -843,13 +1095,23 @@ export function startRelayStatusPort(
         // Port 已断开（侧栏关闭），静默清理即可
       }
     };
+    const sendSelection = (): void => {
+      const selection = manager.getSelection?.();
+      if (selection) {
+        send({ type: 'selection', mode: selection.mode, tabIds: selection.tabIds });
+      }
+    };
     send({ type: 'snapshot', statuses: manager.getStatuses() });
+    sendSelection();
     const invokeLogs = manager.getInvokeLogs?.();
     if (invokeLogs) {
       send({ type: 'invoke-logs', entries: invokeLogs });
     }
     const unsubscribe = manager.onStatusChange((statuses) => {
       send({ type: 'update', statuses });
+    });
+    const unsubscribeSelection = manager.onSelectionChange?.((selection) => {
+      send({ type: 'selection', mode: selection.mode, tabIds: selection.tabIds });
     });
     const unsubscribeInvokeLog = manager.onInvokeLog?.((phase, entry) => {
       send({ type: 'invoke-log', phase, entry });
@@ -862,6 +1124,25 @@ export function startRelayStatusPort(
         message.type === 'subscribe'
       ) {
         send({ type: 'snapshot', statuses: manager.getStatuses() });
+        sendSelection();
+        return;
+      }
+      // 标签页数据源选择：数组 = 手动多选，null = 恢复默认自动模式；
+      // 连接增删结果经状态快照自动推送
+      if (
+        typeof message === 'object' &&
+        message !== null &&
+        message.type === 'set-selection'
+      ) {
+        const tabIds = (message as { tabIds?: unknown }).tabIds;
+        const valid =
+          tabIds === null ||
+          (Array.isArray(tabIds) && tabIds.every((id) => typeof id === 'number'));
+        if (valid) {
+          void manager.setSelection?.(tabIds as number[] | null);
+        } else {
+          console.warn('[webmcp-relay-source] invalid set-selection payload, ignored');
+        }
         return;
       }
       // 手动刷新按钮：重建活动标签页的 SW→页面 Port 或 SW→relay WebSocket；
@@ -877,6 +1158,7 @@ export function startRelayStatusPort(
     });
     port.onDisconnect.addListener(() => {
       unsubscribe();
+      unsubscribeSelection?.();
       unsubscribeInvokeLog?.();
     });
   };

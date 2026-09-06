@@ -112,6 +112,22 @@
       .relay-page-running { font-size: 12px; color: #d97706; }
       .relay-page-terminated { font-size: 11px; color: #9ca3af; }
       .relay-page-empty { font-size: 12px; color: #9ca3af; text-align: center; margin-top: 24px; padding: 0 12px; }
+      /* relay 数据源选择：checkbox 多选；未选中的页签不连 relay（数据过滤不传递） */
+      .relay-source-picker { display: flex; flex-direction: column; gap: 6px; }
+      .relay-source-picker h4 { font-size: 13px; color: #1f2328; font-weight: 500; }
+      .relay-source-mode { font-size: 11px; color: #6b7280; }
+      .relay-source-list { list-style: none; display: flex; flex-direction: column; gap: 4px; }
+      .relay-source-item {
+        display: flex; align-items: center; gap: 8px; padding: 4px 8px;
+        border: 1px solid #e5e7eb; border-radius: 6px; background: #ffffff;
+      }
+      .relay-source-label { display: flex; align-items: center; gap: 6px; flex: 1; min-width: 0; cursor: pointer; }
+      .relay-source-label input[type='checkbox'] { width: 14px; height: 14px; flex: none; }
+      .relay-source-title {
+        font-size: 12px; color: #1f2328;
+        overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+      }
+      .relay-source-reset { align-self: flex-start; }
       .invoke-list { list-style: none; display: flex; flex-direction: column; gap: 6px; }
       .invoke-item {
         border: 1px solid #e5e7eb; border-radius: 8px; background: #ffffff;

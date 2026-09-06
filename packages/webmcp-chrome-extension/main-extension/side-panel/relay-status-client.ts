@@ -9,6 +9,7 @@ import {
   type RelayInvokeLogEntry,
   type RelayStatusMessage,
   type RelayStatusRequest,
+  type RelayTabSelection,
   type RelayTabStatus,
 } from '../../core/relay-status-protocol';
 
@@ -21,9 +22,13 @@ export interface RelayStatusClient {
   getInvokeLogs(): RelayInvokeLogEntry[];
   /** 调用日志变化回调（快照对齐或增量事件后触发，参数为最新全量数组）。 */
   onInvokeLogs(listener: (entries: RelayInvokeLogEntry[]) => void): () => void;
+  /** 最近一次标签页数据源选择快照（SW 推送；连接前为默认自动模式空集）。 */
+  getSelection(): RelayTabSelection;
+  /** 标签页数据源选择变化回调（订阅即触发一次，返回取消订阅函数）。 */
+  onSelectionChange(listener: (selection: RelayTabSelection) => void): () => void;
   /**
-   * 向 SW 发送控制请求（手动刷新连接等）。连接未就绪时静默丢弃 ——
-   * 刷新类操作语义幂等，重连成功后再点一次即可。
+   * 向 SW 发送控制请求（手动刷新连接 / 更新标签页选择等）。连接未就绪时静默丢弃 ——
+   * 刷新与选择类操作语义幂等，重连成功后再点一次即可。
    */
   sendRequest(request: RelayStatusRequest): void;
   /** 主动断开（侧边栏卸载时调用）。 */
@@ -54,10 +59,12 @@ export function connectRelayStatus(
   let disposed = false;
   let statuses: RelayTabStatus[] = [];
   let invokeLogs: RelayInvokeLogEntry[] = [];
+  let selection: RelayTabSelection = { mode: 'auto', tabIds: [] };
   let reconnectDelayMs = RECONNECT_DELAY_INITIAL_MS;
   let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   const listeners = new Set<(statuses: RelayTabStatus[]) => void>();
   const invokeLogListeners = new Set<(entries: RelayInvokeLogEntry[]) => void>();
+  const selectionListeners = new Set<(selection: RelayTabSelection) => void>();
 
   const notify = (): void => {
     for (const listener of listeners) {
@@ -68,6 +75,12 @@ export function connectRelayStatus(
   const notifyInvokeLogs = (): void => {
     for (const listener of invokeLogListeners) {
       listener(invokeLogs);
+    }
+  };
+
+  const notifySelection = (): void => {
+    for (const listener of selectionListeners) {
+      listener(selection);
     }
   };
 
@@ -107,6 +120,14 @@ export function connectRelayStatus(
         if (Array.isArray(msg.entries)) {
           invokeLogs = msg.entries.map((entry) => ({ ...entry }));
           notifyInvokeLogs();
+        }
+        return;
+      }
+      if (typeof msg === 'object' && msg !== null && msg.type === 'selection') {
+        const tabIds = msg.tabIds;
+        if ((msg.mode === 'auto' || msg.mode === 'manual') && Array.isArray(tabIds)) {
+          selection = { mode: msg.mode, tabIds: tabIds.filter((id) => typeof id === 'number') };
+          notifySelection();
         }
         return;
       }
@@ -157,6 +178,14 @@ export function connectRelayStatus(
       listener(invokeLogs);
       return () => {
         invokeLogListeners.delete(listener);
+      };
+    },
+    getSelection: () => ({ mode: selection.mode, tabIds: [...selection.tabIds] }),
+    onSelectionChange(listener) {
+      selectionListeners.add(listener);
+      listener(selection);
+      return () => {
+        selectionListeners.delete(listener);
       };
     },
     sendRequest(request: RelayStatusRequest): void {

@@ -14,7 +14,7 @@ import { startRelayStatusPort, startTabSourceManager } from '../core/tab-source-
  * SW 构建标记：每次改动 SW 相关代码后更新，用于在 SW 控制台确认
  * 浏览器实际加载的是哪个构建（排查「改了代码但行为没变」的 stale dist 问题）。
  */
-const SW_BUILD_TAG = 'relay-orch-v3 + tabs-permission + diag (2026-09-06)';
+const SW_BUILD_TAG = 'relay-orch-v4 + tab-selection-gating (2026-09-06)';
 console.info(`[WebMCP] SW boot: ${SW_BUILD_TAG}`);
 
 // 点击工具栏图标时打开侧边栏（行为由浏览器持久记住，无需每次 SW 唤醒都重设也安全，
