@@ -154,13 +154,24 @@ export class RelayRegistry {
   }
 
   /**
-   * Lists active sources that currently publish at least one tool.
+   * Lists all connected sources ordered by recency.
+   *
+   * Zero-tool sources are included (with `toolCount: 0`) so MCP clients can see
+   * every connected tab — a source that connected but published no tools yet is
+   * operationally different from "nothing connected", and hiding it made that
+   * state impossible to diagnose from `webmcp_list_sources`.
    */
   listSources(): SourceInfo[] {
     return Array.from(this.sourceByConnectionId.values())
       .map((source) => this.toSourceInfo(source))
-      .filter((source) => source.toolCount > 0)
       .sort((a, b) => this.compareRecency(b.lastSeenAt, a.lastSeenAt, b.sourceId, a.sourceId));
+  }
+
+  /**
+   * Returns the current tool count for a connection (0 if unknown).
+   */
+  toolCountOf(connectionId: string): number {
+    return this.toolsByConnectionId.get(connectionId)?.length ?? 0;
   }
 
   /**

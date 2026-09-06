@@ -354,6 +354,89 @@ describe('RelaySourceClient 运行期消息', () => {
     });
     client.stop();
   });
+
+  it('hello accepted 后按 2s/5s/10s 有限次重推工具快照（对账兜底）', async () => {
+    vi.useFakeTimers();
+    const facade = createFacadeStub();
+    const client = createClient({ facade, autoConnect: false });
+    client.start();
+    await vi.advanceTimersByTimeAsync(0);
+    const socket = FakeSocket.instances[0]!;
+    socket.receive({
+      type: 'server-hello',
+      service: 'webmcp-extension-relay',
+      version: 1,
+      host: '127.0.0.1',
+      instanceId: 'inst-1',
+      port: 9333,
+    });
+    await vi.advanceTimersByTimeAsync(0);
+    socket.receive({ type: 'hello/accepted' });
+    await vi.advanceTimersByTimeAsync(0);
+
+    const pushes = (): number => socket.sent.filter((m) => m.includes('"type":"tools/changed"')).length;
+    expect(socket.sent.some((m) => m.includes('"type":"tools/list"'))).toBe(true);
+    expect(pushes()).toBe(0);
+
+    // 2s → 1 次重推；5s → 累计 2 次；10s → 累计 3 次；此后不再推
+    await vi.advanceTimersByTimeAsync(2_000);
+    expect(pushes()).toBe(1);
+    await vi.advanceTimersByTimeAsync(3_000);
+    expect(pushes()).toBe(2);
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(pushes()).toBe(3);
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(pushes()).toBe(3);
+
+    client.stop();
+  });
+
+  it('toolsChanged 推送失败后单次重试成功（不使 registry 停留旧快照）', async () => {
+    vi.useFakeTimers();
+    let listToolsCalls = 0;
+    const facade = createFacadeStub({
+      listTools: vi.fn(async () => {
+        listToolsCalls += 1;
+        // 第 1 次 = 握手初始快照（成功）；第 2 次 = toolsChanged 推送（失败）；之后恢复
+        if (listToolsCalls === 2) {
+          throw new Error('port busy');
+        }
+        return [{ name: 'get_status', description: 'Get status', inputSchema: { type: 'object' } }];
+      }),
+    });
+    const client = createClient({ facade, autoConnect: false });
+    client.start();
+    await vi.advanceTimersByTimeAsync(0);
+    const socket = FakeSocket.instances[0]!;
+    socket.receive({
+      type: 'server-hello',
+      service: 'webmcp-extension-relay',
+      version: 1,
+      host: '127.0.0.1',
+      instanceId: 'inst-1',
+      port: 9333,
+    });
+    await vi.advanceTimersByTimeAsync(0);
+    socket.receive({ type: 'hello/accepted' });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(socket.sent.some((m) => m.includes('"type":"tools/list"'))).toBe(true);
+
+    // 推送失败：无 tools/changed 发出
+    facade.emitToolsChanged();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(socket.sent.some((m) => m.includes('"type":"tools/changed"'))).toBe(false);
+
+    // 1.5s 后单次重试成功
+    await vi.advanceTimersByTimeAsync(1_500);
+    expect(socket.sent.filter((m) => m.includes('"type":"tools/changed"'))).toHaveLength(1);
+
+    // 后续 toolsChanged 正常推送，不再叠加重试
+    facade.emitToolsChanged();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(socket.sent.filter((m) => m.includes('"type":"tools/changed"'))).toHaveLength(2);
+
+    client.stop();
+  });
 });
 
 describe('RelaySourceClient 断线恢复状态机', () => {

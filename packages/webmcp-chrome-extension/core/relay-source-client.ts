@@ -33,6 +33,14 @@ const REDISCOVERY_DELAYS_MS = [10_000, 20_000, 30_000];
 const DORMANT_HEARTBEAT_INTERVAL_MS = 120_000;
 /** 单次工具调用超时：超时后向 relay 回 isError result，避免 MCP Client 悬挂。 */
 const INVOKE_TIMEOUT_MS = 60_000;
+/**
+ * hello 接受后的延迟重推序列：初始快照在握手时取一次，可能早于页面的工具注册
+ * （SPA 慢加载 / 反爬挑战页延迟），且 toolsChanged 推送链任何一环丢失都会让
+ * registry 停留在 0 工具旧快照 —— 有限次重推作为对账兜底。
+ */
+const INITIAL_RESYNC_DELAYS_MS = [2_000, 5_000, 10_000];
+/** tools/changed 推送失败后的单次重试延迟（仅重试一次，避免失败风暴）。 */
+const PUSH_RETRY_DELAY_MS = 1_500;
 
 /** relay → 浏览器源握手问候（上游 ServerHelloMessage）。 */
 export interface RelayServerHello {
@@ -192,6 +200,24 @@ function safeSend(socket: RelaySocket, data: string): void {
   }
 }
 
+/** 工具名列表的日志摘要：空列表显式标注（0 工具是「源被 relay 隐藏」的关键诊断信号）。 */
+function toolNamesSummary(tools: RelayToolDescriptor[]): string {
+  if (tools.length === 0) {
+    return '0 个工具（页面尚未注册任何 WebMCP 工具，relay 的 list_sources 不会显示该源）';
+  }
+  return `${String(tools.length)} 个: ${tools.map((tool) => tool.name).join(', ')}`;
+}
+
+/** invoke 参数的日志摘要（截断，避免大参数刷屏）。 */
+function summarizeArgs(args: Record<string, unknown>, max = 200): string {
+  try {
+    const text = JSON.stringify(args) ?? '{}';
+    return text.length > max ? `${text.slice(0, max)}…(+${String(text.length - max)})` : text;
+  } catch {
+    return '<unserializable args>';
+  }
+}
+
 /** 解析 server-hello（字段校验对照上游 parseRelayHello）。 */
 function parseServerHello(value: unknown): RelayServerHello | null {
   if (!isJsonObject(value) || value['type'] !== 'server-hello') {
@@ -251,6 +277,10 @@ export class RelaySourceClient {
   private stopped = false;
   /** dormant 期间检测到的 LNA 拦截标记（连接成功或主动唤醒时复位）。 */
   private lnaBlocked = false;
+  /** hello 接受后的延迟重推定时器（连接断开或 stop 时清理）。 */
+  private resyncTimers: ReturnType<typeof setTimeout>[] = [];
+  /** tools/changed 推送失败的重试定时器（单次）。 */
+  private pushRetryTimer: ReturnType<typeof setTimeout> | null = null;
   private readonly statusListeners = new Set<(status: RelayConnectionStatus) => void>();
   /** 最近一次发射的状态（toolsCount 增量更新时复用 state/endpoint）。 */
   private lastStatus: RelayConnectionStatus | null = null;
@@ -379,6 +409,8 @@ export class RelaySourceClient {
       this.retryTimer = null;
     }
     this.clearHelloAckTimer();
+    this.clearResyncTimers();
+    this.clearPushRetryTimer();
     this.cleanupDormant();
     this.unsubscribeToolsChanged?.();
     this.unsubscribeToolsChanged = null;
@@ -547,6 +579,9 @@ export class RelaySourceClient {
       this.activeSocket = null;
       this.activeEndpoint = null;
       this.helloAccepted = false;
+      // 连接已死：待执行的重推/重试全部作废
+      this.clearResyncTimers();
+      this.clearPushRetryTimer();
       this.scheduleRetrySameEndpoint(lastEndpoint);
     });
     socket.addEventListener('error', () => {
@@ -612,19 +647,70 @@ export class RelaySourceClient {
   private helloAckTimer: ReturnType<typeof setTimeout> | null = null;
   private helloAccepted = false;
 
-  private async pushToolsChanged(): Promise<void> {
+  private async pushToolsChanged(isRetry = false): Promise<void> {
     const socket = this.activeSocket;
     if (!socket || !this.helloAccepted) {
       return;
     }
     try {
       const tools = await this.facade.listTools();
-      relayLog('info', this.debugLog, this.source.tabId, [`tools/changed: pushing ${String(tools.length)} tool(s)`]);
+      relayLog('info', this.debugLog, this.source.tabId, [`tools/changed: pushing ${toolNamesSummary(tools)}`]);
       this.emitToolsCount(tools.length);
       safeSend(socket, JSON.stringify({ type: 'tools/changed', tools }));
+      // 推送成功：待重试已无意义（本次推送就是最新快照）
+      this.clearPushRetryTimer();
     } catch (error) {
       console.warn('[webmcp-relay-source] Failed to push tools/changed:', error);
+      // 仅非重试路径调度一次重试，避免持续性失败演变为重试风暴
+      if (!isRetry) {
+        this.schedulePushRetry(socket);
+      }
     }
+  }
+
+  /** 推送失败后的单次重试（短退避）；重试仍失败则等待下一次 toolsChanged 或重连。 */
+  private schedulePushRetry(socket: RelaySocket): void {
+    if (this.stopped || this.pushRetryTimer) {
+      return;
+    }
+    this.pushRetryTimer = setTimeout(() => {
+      this.pushRetryTimer = null;
+      if (this.activeSocket !== socket || this.stopped || !this.helloAccepted) {
+        return;
+      }
+      relayLog('info', this.debugLog, this.source.tabId, ['retrying tools/changed push']);
+      void this.pushToolsChanged(true);
+    }, PUSH_RETRY_DELAY_MS);
+  }
+
+  private clearPushRetryTimer(): void {
+    if (this.pushRetryTimer) {
+      clearTimeout(this.pushRetryTimer);
+      this.pushRetryTimer = null;
+    }
+  }
+
+  /** 握手成功后的有限次延迟重推：覆盖页面晚注册工具与 toolsChanged 链路丢事件。 */
+  private scheduleInitialResync(socket: RelaySocket): void {
+    this.clearResyncTimers();
+    for (const delay of INITIAL_RESYNC_DELAYS_MS) {
+      const timer = setTimeout(() => {
+        this.resyncTimers = this.resyncTimers.filter((entry) => entry !== timer);
+        if (this.activeSocket !== socket || this.stopped || !this.helloAccepted) {
+          return;
+        }
+        relayLog('debug', this.debugLog, this.source.tabId, [`resync push after ${String(delay)}ms`]);
+        void this.pushToolsChanged();
+      }, delay);
+      this.resyncTimers.push(timer);
+    }
+  }
+
+  private clearResyncTimers(): void {
+    for (const timer of this.resyncTimers) {
+      clearTimeout(timer);
+    }
+    this.resyncTimers = [];
   }
 
   // ---- 运行期消息 ----
@@ -654,12 +740,16 @@ export class RelaySourceClient {
         'info',
         this.debugLog,
         this.source.tabId,
-        [`hello accepted by relay (${this.activeEndpoint ? `${this.activeEndpoint.host}:${String(this.activeEndpoint.port)}` : 'unknown'}), pushing ${String(this.pendingInitialTools.length)} tool(s)`]
+        [
+          `hello accepted by relay (${this.activeEndpoint ? `${this.activeEndpoint.host}:${String(this.activeEndpoint.port)}` : 'unknown'}), pushing ${toolNamesSummary(this.pendingInitialTools)}`,
+        ]
       );
       this.emitToolsCount(this.pendingInitialTools.length);
       this.emitStatus('connected');
       safeSend(socket, JSON.stringify({ type: 'tools/list', tools: this.pendingInitialTools }));
       this.pendingInitialTools = [];
+      // 初始快照可能早于页面工具注册，安排有限次延迟重推对账
+      this.scheduleInitialResync(socket);
       return;
     }
 
@@ -722,7 +812,7 @@ export class RelaySourceClient {
       return;
     }
     const invokeStart = Date.now();
-    relayLog('info', this.debugLog, this.source.tabId, [`invoke → ${toolName}`]);
+    relayLog('info', this.debugLog, this.source.tabId, [`invoke → ${toolName} args=${summarizeArgs(args)}`]);
 
     try {
       const result = await Promise.race([

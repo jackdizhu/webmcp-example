@@ -33,3 +33,4 @@
 | `008-lna-loopback-websocket-blocked.md` | Chrome LNA 静默拦截 SW 的 loopback WebSocket（ERR_BLOCKED_BY_LOCAL_NETWORK_ACCESS_CHECKS），实现权限检测 + 侧栏琥珀提示 | ✅ 已解决 |
 | `009-tabs-permission-url-visibility.md` | 缺 `tabs` 权限致「无活动标签页」：MV3 中 content_scripts.matches 不授予 URL 可见性，tabs.query({url}) 静默空结果 | ✅ 已解决 |
 | `010-port-receiver-race-dead-port-heal.md` | 重连死循环双 bug：content-script 接收器在握手后才注册（时序竞争）+ SW 永不重建死 Port，改为同步注册 + scripting 重注入自愈 | ✅ 已解决 |
+| `011-list-sources-hides-zero-tool-sources.md` | `webmcp_list_sources` 看不见已连接 0 工具标签页：registry 过滤 toolCount=0 源 + 推送链无对账；改为保留全量源 + 延迟重推 + 失败重试 + 对账日志 | ✅ 已验证 |

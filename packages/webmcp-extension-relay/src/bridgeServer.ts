@@ -772,7 +772,15 @@ export class RelayBridgeServer extends EventEmitter {
       case 'tools/list':
       case 'tools/changed':
         try {
+          const previousCount = this.registry.toolCountOf(connectionId);
           this.registry.registerTools(connectionId, message.tools);
+          const currentCount = this.registry.toolCountOf(connectionId);
+          // 对账日志：与扩展端 [webmcp-relay-source] 日志配合，定位工具清单同步断层
+          if (currentCount !== previousCount) {
+            process.stderr.write(
+              `[webmcp-extension-relay] source ${connectionId} tools ${String(previousCount)}→${String(currentCount)}\n`
+            );
+          }
           this.emit('stateChanged');
         } catch (err) {
           process.stderr.write(

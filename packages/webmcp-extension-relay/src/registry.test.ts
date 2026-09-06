@@ -361,14 +361,33 @@ describe('RelayRegistry', () => {
     expect(sources[1]?.sourceId).toBe('conn-a');
   });
 
-  it('filters out sources with zero tools from listSources', () => {
+  it('includes zero-tool sources in listSources with toolCount 0', () => {
     const registry = new RelayRegistry();
 
     registry.upsertSource('conn-1', hello('tab-1', 'https://example.com'));
 
-    expect(registry.listSources()).toHaveLength(0);
+    // 已连接但尚未发布工具的源必须可见（否则 MCP 端「已连接 0 工具」与「未连接」不可区分）
+    const before = registry.listSources();
+    expect(before).toHaveLength(1);
+    expect(before[0]?.toolCount).toBe(0);
 
     registry.registerTools('conn-1', [tool({ name: 'tool_a' })]);
     expect(registry.listSources()).toHaveLength(1);
+    expect(registry.listSources()[0]?.toolCount).toBe(1);
+  });
+
+  it('toolCountOf reports current tool count per connection', () => {
+    const registry = new RelayRegistry();
+
+    registry.upsertSource('conn-1', hello('tab-1', 'https://example.com'));
+    expect(registry.toolCountOf('conn-1')).toBe(0);
+
+    registry.registerTools('conn-1', [tool({ name: 'tool_a' }), tool({ name: 'tool_b' })]);
+    expect(registry.toolCountOf('conn-1')).toBe(2);
+
+    registry.registerTools('conn-1', []);
+    expect(registry.toolCountOf('conn-1')).toBe(0);
+
+    expect(registry.toolCountOf('conn-unknown')).toBe(0);
   });
 });

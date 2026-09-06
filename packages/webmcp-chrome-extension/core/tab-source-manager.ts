@@ -205,11 +205,26 @@ function extractOrigin(url: string | undefined): string | undefined {
  * 基于一个 page-tools 桥接 Port 构建页面工具门面（RelayToolsFacade 实现）。
  * 请求-响应协议与 page-tools-bridge.ts 完全一致，另加调用超时兜底：
  * Port 死亡或 content script 无响应时 reject，由 relay 客户端回 isError result。
+ *
+ * @param logTag 日志标签（通常为 `tab <id>`），用于在 SW 控制台区分多个标签页的调用。
  */
-export function createPortToolsFacade(port: chrome.runtime.Port): {
+export function createPortToolsFacade(
+  port: chrome.runtime.Port,
+  logTag = '<unknown-tab>'
+): {
   facade: import('./relay-source-client').RelayToolsFacade;
   disconnect(): void;
 } {
+  const LOG_PREFIX = `[webmcp-relay-source][${logTag}]`;
+  /** 参数/结果摘要：JSON 序列化 + 截断，避免大载荷刷屏。 */
+  const summarize = (value: unknown, max = 300): string => {
+    try {
+      const text = JSON.stringify(value) ?? String(value);
+      return text.length > max ? `${text.slice(0, max)}…(+${String(text.length - max)})` : text;
+    } catch {
+      return '<unserializable>';
+    }
+  };
   let nextRequestId = 1;
   const pending = new Map<number, { resolve: (value: unknown) => void; reject: (reason: Error) => void; timer: ReturnType<typeof setTimeout> }>();
   const toolsChangedListeners = new Set<() => void>();
@@ -276,7 +291,12 @@ export function createPortToolsFacade(port: chrome.runtime.Port): {
 
   const facade: RelayToolsFacade = {
     listTools: async () => {
+      const startedAt = Date.now();
       const tools = (await request('listTools')) as PageToolMeta[];
+      console.info(
+        `${LOG_PREFIX} listTools ← ${String(tools.length)} 个（${String(Date.now() - startedAt)}ms）` +
+          (tools.length > 0 ? `: ${tools.map((tool) => tool.name).join(', ')}` : '—— 页面未注册任何 WebMCP 工具')
+      );
       return tools.map(
         (tool): RelayToolDescriptor => ({
           name: tool.name,
@@ -285,7 +305,23 @@ export function createPortToolsFacade(port: chrome.runtime.Port): {
         })
       );
     },
-    callTool: async (name, args) => request('callTool', { name, args }),
+    callTool: async (name, args) => {
+      const startedAt = Date.now();
+      console.info(`${LOG_PREFIX} callTool → ${name} args=${summarize(args)}`);
+      try {
+        const result = await request('callTool', { name, args });
+        console.info(
+          `${LOG_PREFIX} callTool ← ${name} ok（${String(Date.now() - startedAt)}ms） result=${summarize(result)}`
+        );
+        return result;
+      } catch (error) {
+        console.warn(
+          `${LOG_PREFIX} callTool ← ${name} FAILED（${String(Date.now() - startedAt)}ms）:`,
+          error
+        );
+        throw error;
+      }
+    },
     onToolsChanged: (listener) => {
       toolsChangedListeners.add(listener);
       return () => {
@@ -519,7 +555,7 @@ export function startTabSourceManager(options: TabSourceManagerOptions = {}): {
       }
       healPort(tabId, message);
     });
-    const { facade, disconnect } = createPortToolsFacade(port);
+    const { facade, disconnect } = createPortToolsFacade(port, `tab ${String(tabId)}`);
     // exactOptionalPropertyTypes：可选字段仅在存在时写入，避免写入显式 undefined
     const origin = extractOrigin(url);
     const source: RelaySourceMeta = { tabId: String(tabId) };
