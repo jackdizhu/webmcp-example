@@ -27,7 +27,10 @@ import {
   type PageToolsClient,
   type PanelSettings,
 } from './panel-client';
+import { connectRelayStatus } from './relay-status-client';
+import type { RelayTabStatus } from '../../core/relay-status-protocol';
 import { AppHeader } from './components/AppHeader';
+import { RelayStatusBar } from './components/RelayStatusBar';
 import { SettingsPanel } from './components/SettingsPanel';
 import { TabBar } from './components/TabBar';
 import { TOOL_PENDING_TEXT, type UiMessage } from './components/types';
@@ -58,6 +61,11 @@ export const App = defineComponent({
     let pageTools: PageToolsClient | null = null;
     let unsubscribeStatus: (() => void) | null = null;
     let unsubscribeToolsChange: (() => void) | null = null;
+    // relay 连接状态订阅（SW 状态端口推送各标签页连接快照）
+    let relayStatusClient: ReturnType<typeof connectRelayStatus> | null = null;
+    let unsubscribeRelayStatus: (() => void) | null = null;
+    /** 各标签页上一次的连接状态（diff 出迁移事件写日志）。 */
+    const relayStateCache = new Map<number, string>();
     // agent 循环的多轮对话历史（不含 system 消息），跨轮次保留上下文
     let history: ChatMessage[] = [];
 
@@ -153,6 +161,28 @@ export const App = defineComponent({
       } finally {
         clearCurrentTrace();
         busy.value = false;
+      }
+    };
+
+    const relayStatuses = ref<RelayTabStatus[]>([]);
+
+    /** relay 状态快照落 UI，并把逐 tab 的状态迁移写入日志管线（可导出排查）。 */
+    const applyRelayStatuses = (statuses: RelayTabStatus[]): void => {
+      relayStatuses.value = statuses;
+      const seen = new Set<number>();
+      for (const status of statuses) {
+        seen.add(status.tabId);
+        const prev = relayStateCache.get(status.tabId);
+        if (prev !== status.state) {
+          relayStateCache.set(status.tabId, status.state);
+          logEvent('info', 'relay', 'relay_status', `tab ${String(status.tabId)} → ${status.state}${status.detail ? ` (${status.detail})` : ''}`);
+        }
+      }
+      for (const tabId of [...relayStateCache.keys()]) {
+        if (!seen.has(tabId)) {
+          relayStateCache.delete(tabId);
+          logEvent('info', 'relay', 'relay_status', `tab ${String(tabId)} → removed`);
+        }
       }
     };
 
@@ -272,12 +302,19 @@ export const App = defineComponent({
       unsubscribeToolsChange = pageTools.onToolsChange(() => {
         void refreshTools();
       });
+
+      // relay 连接状态订阅：连接/变更快照 → 状态栏 + 日志管线
+      relayStatusClient = connectRelayStatus();
+      unsubscribeRelayStatus = relayStatusClient.onUpdate(applyRelayStatuses);
+
       await refreshTools();
     });
 
     onUnmounted(() => {
       unsubscribeStatus?.();
       unsubscribeToolsChange?.();
+      unsubscribeRelayStatus?.();
+      relayStatusClient?.disconnect();
       pageTools?.disconnect();
       pageTools = null;
     });
@@ -293,6 +330,7 @@ export const App = defineComponent({
             showSettings.value = !showSettings.value;
           },
         }),
+        h(RelayStatusBar, { statuses: relayStatuses.value }),
         settings.debugMode
           ? h(TabBar, {
               activeTab: activeTab.value,

@@ -61,6 +61,27 @@ pnpm --filter html-app dev      # 另开终端，启动示例页面
 | 校验 | 依据工具 `inputSchema` 校验代理传入参数 |
 | 执行 | 通过 `executeTool(tool, input)` 或 MCP Client 调用页面工具 |
 | 验证 | 获取执行结果并与预期比对，形成验证闭环 |
+| relay 出口 | SW 以「浏览器源」直连本机 `webmcp-local-relay`（9333–9348 扫描），把各标签页工具暴露给外部 MCP 客户端（Claude / Cursor 等），页面端零侵入 |
+
+### relay 浏览器源（SW 出口通道）
+
+- `core/relay-source-client.ts`：单标签页到 relay 的 WebSocket 客户端，协议语义对照上游
+  `webmcp-local-relay` 的 `widgetRuntime`（发现 → hello 握手 → tools/list → invoke/result →
+  断线重试 500ms → 重扫 10/20/30s → dormant 2min 心跳）。
+- `core/tab-source-manager.ts`：SW 编排层，每 http(s) 标签页一个客户端；经
+  `chrome.tabs.connect(tabId)` 复用 `page-tools-bridge` 协议读写页面工具（content script 零改动）。
+- **连接状态展示**：`core/relay-status-protocol.ts` 定义状态端口协议
+  （`runtime.connect` 名 `webmcp-relay-status`）；SW 经 `startRelayStatusPort` 下发全量快照
+  （连接即发 + 变更推送）；侧栏 `relay-status-client.ts` 订阅（断线指数退避重连），
+  `RelayStatusBar` 组件在头部下方展示 relay 摘要状态与逐标签页明细（状态/端点/工具数），
+  状态迁移同步写入日志管线（调试 Tab 可导出）。
+- **调试日志**：`RelaySourceClient` 内建连接过程日志（前缀 `[webmcp-relay-source][tab <id>]`，
+  `debugLog: false` 可关）：探测候选耗时、握手、状态迁移、tools 同步、invoke 耗时。
+  在 `chrome://serviceworker-internals` 或扩展 SW DevTools 控制台按前缀过滤即可跟进全链路。
+- 端点缓存写 `chrome.storage.local.relayEndpoint`；`reload` 消息映射为 `chrome.tabs.reload`。
+- 约束：MV3 SW WebSocket 需 Chrome 116+（manifest 已同步）；SW 的 WS Origin 为
+  `chrome-extension://<id>`，relay 侧需 `--widget-origin` 放行该来源。
+- 设计文档：[docs/extension-relay-reuse-design.md](../../docs/extension-relay-reuse-design.md)。
 
 ## 关键约束
 
@@ -75,13 +96,18 @@ pnpm --filter html-app dev      # 另开终端，启动示例页面
 ## 测试
 
 ```bash
-pnpm test        # 单元测试（仅 core 纯逻辑）
-pnpm test:e2e    # 端到端（需先 pnpm exec playwright install，并 pnpm build:e2e）
+pnpm test            # 单元测试（仅 core 纯逻辑）
+pnpm test:e2e        # 端到端（需先 pnpm exec playwright install，并 pnpm build:e2e）
+pnpm test:e2e:relay  # relay 集成端到端（自动构建 relay + e2e 扩展；需 Playwright 浏览器）
 ```
 
 e2e 覆盖 document_start 注入、严格页面 CSP、命令式与声明式工具的发现与调用、
 `toolautosubmit`、`respondWith()`、工具列表变更、工具错误、动态注册与移除、
 顶层框架作用域、导航与 BFCache 恢复，另有一条原生 Chromium 通道验证同源子文档工具。
+
+relay 集成 e2e（`test:e2e:relay`）验证完整闭环：真实 Chrome 加载扩展 → SW 端口发现
+并连接 relay（单进程 stdio + WebSocket 双传输）→ MCP 客户端 `webmcp_list_sources`/
+`listTools` 看到页面工具 → `callTool` 全链路调用与错误传播。relay 产物缺失时自动跳过。
 
 ## 参考
 

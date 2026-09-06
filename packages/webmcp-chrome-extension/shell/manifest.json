@@ -3,12 +3,13 @@
   "name": "WebMCP Extension",
   "description": "Install WebMCP on websites and consume their tools from an isolated content script.",
   "version": "1.0.0",
-  "minimum_chrome_version": "114",
+  "minimum_chrome_version": "116",
   "action": {},
   "side_panel": {
     "default_path": "side-panel.html"
   },
-  "permissions": ["sidePanel", "storage", "downloads"],
+  "permissions": ["sidePanel", "storage", "downloads", "tabs", "scripting"],
+  "host_permissions": ["https://*/*", "http://localhost/*", "http://127.0.0.1/*"],
   "background": {
     "service_worker": "service-worker.iife.js"
   },

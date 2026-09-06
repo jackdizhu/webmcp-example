@@ -1,0 +1,61 @@
+{
+  "name": "webmcp-extension-relay",
+  "version": "5.1.0",
+  "description": "Local MCP relay for browser WebMCP tools over localhost WebSocket (browser source: WebMCP Chrome extension)",
+  "keywords": [
+    "ai-agents",
+    "localhost",
+    "mcp",
+    "model-context-protocol",
+    "relay",
+    "stdio",
+    "webmcp"
+  ],
+  "license": "MIT",
+  "author": "Alex Nahas",
+  "bin": {
+    "webmcp-extension-relay": "./dist/cli.mjs"
+  },
+  "files": [
+    "dist"
+  ],
+  "type": "module",
+  "main": "./dist/index.mjs",
+  "types": "./dist/index.d.mts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.mts",
+      "import": "./dist/index.mjs",
+      "default": "./dist/index.mjs"
+    }
+  },
+  "scripts": {
+    "build": "rm -rf dist && vp pack",
+    "check": "vp check --fix",
+    "clean": "rm -rf dist",
+    "format": "eslint . --fix",
+    "lint": "eslint .",
+    "test": "vitest run",
+    "test:coverage": "vitest run --coverage",
+    "test:watch": "vitest",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/core": "catalog:",
+    "@modelcontextprotocol/server": "catalog:",
+    "ws": "^8.21.3",
+    "zod": "catalog:"
+  },
+  "devDependencies": {
+    "@modelcontextprotocol/client": "catalog:",
+    "@types/node": "catalog:",
+    "@types/ws": "^8.5.14",
+    "@vitest/coverage-v8": "catalog:",
+    "typescript": "catalog:",
+    "vite-plus": "catalog:",
+    "vitest": "catalog:"
+  },
+  "engines": {
+    "node": ">=22"
+  }
+}

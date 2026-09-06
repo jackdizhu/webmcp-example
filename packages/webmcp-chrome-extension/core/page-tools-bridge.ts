@@ -81,11 +81,15 @@ export function serializeToolResult(result: unknown): string {
 /**
  * 启动页面工具桥接：监听扩展内长连接，把 listTools / callTool 代理到给定 MCP Client。
  *
- * @param client 已连接到当前页面的 MCP Client（core/content-script.ts 产出）
+ * @param client 已连接到当前页面的 MCP Client（core/content-script.ts 产出）。
+ *        **也接受尚未完成的握手 Promise**：onConnect 接收器在本函数调用时同步注册，
+ *        请求处理会等待 Promise 落定后再执行。这消除了一个关键竞争——SW 侧在导航
+ *        complete 时立即 tabs.connect，若接收器要等 MCP 握手（可达数十秒）才注册，
+ *        会得到 "Receiving end does not exist" 的死端口，relay 握手随之进入重连循环。
  * @returns 桥接句柄：stop() 停止桥接；notifyToolsChanged() 在页面工具清单
  *          变化（MCP listChanged）时向侧栏广播，弥补纯请求-响应协议无推送的缺口
  */
-export function startPageToolsBridge(client: Client): PageToolsBridgeHandle {
+export function startPageToolsBridge(client: Client | Promise<Client>): PageToolsBridgeHandle {
   const ports = new Set<chrome.runtime.Port>();
 
   const notifyToolsChanged = (): void => {
@@ -114,8 +118,8 @@ export function startPageToolsBridge(client: Client): PageToolsBridgeHandle {
     };
 
     if (request.type === 'listTools') {
-      client
-        .listTools()
+      Promise.resolve(client)
+        .then((resolved) => resolved.listTools())
         .then(({ tools }) =>
           respond({
             id: request.id,
@@ -138,8 +142,9 @@ export function startPageToolsBridge(client: Client): PageToolsBridgeHandle {
       respond({ id: request.id, ok: false, error: 'callTool 缺少 name 参数' });
       return;
     }
-    client
-      .callTool({ name: request.name, arguments: request.args ?? {} })
+    const toolName = request.name;
+    Promise.resolve(client)
+      .then((resolved) => resolved.callTool({ name: toolName, arguments: request.args ?? {} }))
       .then((result) => respond({ id: request.id, ok: true, result }))
       .catch((error: unknown) =>
         respond({ id: request.id, ok: false, error: error instanceof Error ? error.message : String(error) })

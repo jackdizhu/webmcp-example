@@ -2,7 +2,7 @@ import { connectWebMCPClient } from '../core/content-script';
 import { startPageToolsBridge, type PageToolsBridgeHandle } from '../core/page-tools-bridge';
 import type { Client } from '@modelcontextprotocol/client';
 
-/** 桥接句柄：listChanged 回调在握手期间注册，广播时桥接可能尚未建立，故用可空引用。 */
+/** 桥接句柄：main() 同步注册（早于 MCP 握手完成），listChanged 回调触发时必然可用。 */
 let bridge: PageToolsBridgeHandle | null = null;
 
 async function waitForDocument(): Promise<void> {
@@ -79,13 +79,15 @@ async function connectWithRetry(): Promise<Client> {
 }
 
 async function main(): Promise<void> {
-  const client = await connectWithRetry();
+  // 关键：立即注册桥接端口接收器，不等 MCP 握手完成 ——
+  // SW 侧在导航 complete 时即 tabs.connect，若接收器要等握手（最多 5 次重试）
+  // 才注册，会得到 "Receiving end does not exist" 的死端口，relay 握手随之
+  // 进入「探测成功 → 握手失败 → 重连」死循环（实测日志证实）。
+  // 桥接请求会等待 clientPromise 落定后执行，握手期间的请求返回明确错误。
+  const clientPromise = connectWithRetry();
+  bridge = startPageToolsBridge(clientPromise);
 
-  // 握手成功即注册桥接（不等 DOM ready / 初始工具清单），把侧栏可连接窗口最早化。
-  // 桥接生命周期与 content script 一致：文档销毁时随上下文一并回收，无需手动停止。
-  bridge = startPageToolsBridge(client);
-
-  // Keep this connection alive across BFCache restores; document teardown owns final cleanup.
+  const client = await clientPromise;
   await waitForDocument();
   // 初始工具清单仅用于控制台诊断，失败不影响桥接（侧栏会按需拉取）
   try {
