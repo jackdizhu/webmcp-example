@@ -11,7 +11,7 @@
     "stdio",
     "webmcp"
   ],
-  "private": true,
+  "private": false,
   "license": "MIT",
   "author": "jackdizhu",
   "repository": {

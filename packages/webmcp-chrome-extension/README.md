@@ -1,4 +1,4 @@
-# `@mcp-b/webmcp-extension`
+# `webmcp-chrome-extension`
 
 Chromium 扩展：在页面注入 WebMCP，并从隔离世界（isolated world）发现、调用页面暴露的工具。
 
@@ -37,8 +37,10 @@ content script 行为不同（一个面向使用、打印工具，一个面向�
 | `main-extension` | `pnpm build` | `dist/` | 手动加载调试，控制台打印页面工具列表 |
 | `e2e-extension` | `pnpm build:e2e` | `e2e-extension/dist/` | Playwright 自动加载并断言 |
 
-两个产物结构相同（`manifest.json` + `main-world.iife.js` + `content-script.iife.js`），
-都是 IIFE 自包含 classic script —— content script 无法在运行时解析裸导入，依赖必须全部内联。
+两个产物结构相同（`manifest.json` + `main-world.iife.js` + `content-script.iife.js` +
+`service-worker.iife.js` + `side-panel.html`），content script 均为 IIFE 自包含
+classic script —— 无法在运行时解析裸导入，依赖必须全部内联。manifest 的
+`side_panel` / `background` 引用要求两组构建都产出侧栏与 SW 产物，否则 Chrome 拒绝加载。
 
 ## 快速开始
 
@@ -108,6 +110,18 @@ e2e 覆盖 document_start 注入、严格页面 CSP、命令式与声明式工�
 relay 集成 e2e（`test:e2e:relay`）验证完整闭环：真实 Chrome 加载扩展 → SW 端口发现
 并连接 relay（单进程 stdio + WebSocket 双传输）→ MCP 客户端 `webmcp_list_sources`/
 `listTools` 看到页面工具 → `callTool` 全链路调用与错误传播。relay 产物缺失时自动跳过。
+
+## 发布
+
+npm 包仅分发构建产物（`files: ["dist"]`：manifest + 4 个 IIFE 入口 + side-panel.html，
+README / LICENSE 自动携带）。发布经 `.npmrc` 的 `NPM_TOKEN` 认证官方源：
+
+```bash
+pnpm build && npm publish        # 或走根目录 changeset publish 流程
+```
+
+用户 `npm install webmcp-chrome-extension` 后，`node_modules/webmcp-chrome-extension/dist`
+即为可直接"加载已解压的扩展程序"的完整扩展，无需再构建。
 
 ## 参考
 

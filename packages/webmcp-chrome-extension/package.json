@@ -2,7 +2,14 @@
   "name": "webmcp-chrome-extension",
   "version": "1.1.0",
   "description": "Chromium 扩展：在页面注入 WebMCP，并从隔离世界发现、调用页面暴露的工具",
-  "private": true,
+  "keywords": [
+    "ai-agents",
+    "chrome-extension",
+    "mcp",
+    "model-context-protocol",
+    "webmcp"
+  ],
+  "private": false,
   "license": "MIT",
   "author": "jackdizhu",
   "repository": {
@@ -10,6 +17,9 @@
     "url": "git+https://github.com/jackdizhu/webmcp-example.git",
     "directory": "packages/webmcp-chrome-extension"
   },
+  "files": [
+    "dist"
+  ],
   "type": "module",
   "scripts": {
     "build": "rm -rf dist && vp pack --filter main-extension-main-world --filter main-extension-content-script --filter main-extension-side-panel --filter main-extension-service-worker",
