@@ -144,6 +144,13 @@ export interface RelaySourceClientOptions {
   clearCachedEndpoint?: () => void;
   /** relay 下发 reload 时的自愈回调（扩展方案：chrome.tabs.reload(tabId)）。 */
   onReload?: () => void;
+  /**
+   * Port 断连上报回调：invoke 失败或握手失败归因为 Port 死亡时触发，
+   * 编排层（tab-source-manager）借此启动 healPort 重建整个客户端条目。
+   * 这是打断「握手失败 → socket.close → 重连 → 再失败」死循环的关键钩子：
+   * 死 Port 不会再发 onDisconnect 事件，必须由调用方主动上报。
+   */
+  onPortDead?: (reason: string) => void;
   /** 单次工具调用超时（默认 60_000ms；超时向 relay 回 isError result）。 */
   invokeTimeoutMs?: number;
   /** 自动开始发现连接（默认 true）。 */
@@ -225,6 +232,29 @@ function summarizeArgs(args: Record<string, unknown>, max = 200): string {
   }
 }
 
+/**
+ * Port 断连类错误匹配：Chrome 对已断开 Port 调用 postMessage 会同步抛
+ * "Attempting to use a disconnected port object"；页面无接收方时为
+ * "Receiving end does not exist"。与原握手失败归因正则保持一致。
+ */
+export function isPortDisconnectError(message: string): boolean {
+  return /disconnected|receiving end/i.test(message);
+}
+
+/**
+ * 结构化错误码前缀：Port 断连类失败统一包装，MCP 客户端据此识别可自愈错误
+ * （自动重试），而非透传 Chrome 底层英文错误。
+ */
+export const SOURCE_PORT_DISCONNECTED_CODE = 'SOURCE_PORT_DISCONNECTED';
+
+/** 把 Port 断连类错误规范化为带错误码与修复指引的文本（非断连错误原样返回）。 */
+export function normalizePortDisconnectError(message: string): string {
+  if (!isPortDisconnectError(message)) {
+    return message;
+  }
+  return `${SOURCE_PORT_DISCONNECTED_CODE}: ${message}（页面工具 Port 已断开，已触发自动重建，请稍后重试）`;
+}
+
 /** 调用日志条目草稿（不含 tabId，编排层回填；finished 阶段追加结果字段）。 */
 export interface InvokeLogDraft {
   callId: string;
@@ -294,6 +324,7 @@ export class RelaySourceClient {
   private readonly writeCachedEndpoint: ((endpoint: RelayEndpoint) => void) | undefined;
   private readonly clearCachedEndpoint: (() => void) | undefined;
   private readonly onReload: (() => void) | undefined;
+  private readonly onPortDead: ((reason: string) => void) | undefined;
   private readonly invokeTimeoutMs: number;
   private readonly debugLog: boolean;
   private readonly queryLoopbackPermissionFn: LnaPermissionQuerier;
@@ -334,6 +365,7 @@ export class RelaySourceClient {
     this.writeCachedEndpoint = options.writeCachedEndpoint;
     this.clearCachedEndpoint = options.clearCachedEndpoint;
     this.onReload = options.onReload;
+    this.onPortDead = options.onPortDead;
     this.invokeTimeoutMs = options.invokeTimeoutMs ?? INVOKE_TIMEOUT_MS;
     this.debugLog = options.debugLog ?? true;
     this.queryLoopbackPermissionFn = options.queryLoopbackPermission ?? queryLoopbackPermission;
@@ -463,6 +495,60 @@ export class RelaySourceClient {
   /** 更新源元数据（页面标题变化等场景），下次握手生效。 */
   updateSource(patch: Partial<RelaySourceMeta>): void {
     Object.assign(this.source, patch);
+  }
+
+  /**
+   * 通知 relay 移除本源注册（C.2 注册表一致性）：
+   * Port 死亡时注册表里的工具清单已是陈旧快照，若不移除，MCP 客户端的
+   * list_tools 会「看着正常、调必失败」。趁 WebSocket 仍存活时发送，
+   * relay 侧 removeConnection 后由重建的客户端重新握手注册。
+   */
+  notifySourceDisconnected(reason: string): void {
+    const socket = this.activeSocket;
+    if (!socket || !this.helloAccepted) {
+      return;
+    }
+    safeSend(socket, JSON.stringify({ type: 'source/disconnected', reason }));
+    relayLog('warn', true, this.source.tabId, [`source/disconnected sent to relay: ${reason}`]);
+  }
+
+  /**
+   * 手动重建 relay 连接（侧栏「relay连接刷新」按钮）：
+   * 关闭当前 WebSocket 并立即重新全范围发现握手，不经过断线重连退避。
+   * 旧 socket 的 close 事件因 activeSocket 已置空而不会触发重复调度。
+   */
+  reconnectRelay(): void {
+    if (this.stopped) {
+      return;
+    }
+    this.clearHelloAckTimer();
+    this.clearResyncTimers();
+    this.clearPushRetryTimer();
+    if (this.retryTimer) {
+      clearTimeout(this.retryTimer);
+      this.retryTimer = null;
+    }
+    if (this.phase === 'dormant') {
+      this.cleanupDormant();
+    }
+    this.helloAccepted = false;
+    this.phase = 'idle';
+    const socket = this.activeSocket;
+    this.activeSocket = null;
+    this.activeEndpoint = null;
+    if (socket) {
+      try {
+        socket.close();
+      } catch {
+        // 旧 socket 关闭异常忽略
+      }
+    }
+    this.emitStatus('connecting', 'manual relay reconnect');
+    void this.discoverRelay().then((connected) => {
+      if (!connected && !this.stopped) {
+        this.scheduleRediscovery();
+      }
+    });
   }
 
   // ---- 发现与握手 ----
@@ -657,11 +743,22 @@ export class RelaySourceClient {
       })
       .catch((error: unknown) => {
         const message = error instanceof Error ? error.message : String(error);
-        // 高频归因：Port 断连（页面在扩展重载前已打开，content script 失效）
-        const hint = /disconnected|receiving end/i.test(message)
-          ? '（页面侧 content script 失效——扩展重载后请刷新页面再试）'
-          : '';
-        relayLog('warn', true, this.source.tabId, [`Hello handshake failed: ${message}`, hint]);
+        if (isPortDisconnectError(message)) {
+          // 高频归因：Port 断连（页面在扩展重载前已打开，content script 失效）。
+          // 关键修复：不能仅 socket.close() 进入重连循环 —— Port 死后每次握手
+          // 都会在 listTools 处失败，形成 500ms 一次的「一直在重连中」死循环。
+          // 上报编排层触发 healPort 重建 Port 后，重连才有成功可能。
+          relayLog('warn', true, this.source.tabId, [
+            `Hello handshake failed (port dead): ${message} → requesting orchestration heal`,
+          ]);
+          try {
+            this.onPortDead?.(message);
+          } catch (callbackError) {
+            relayLog('warn', true, this.source.tabId, ['onPortDead callback threw:', callbackError]);
+          }
+        } else {
+          relayLog('warn', true, this.source.tabId, [`Hello handshake failed: ${message}`]);
+        }
         try {
           socket.close();
         } catch {
@@ -873,8 +970,21 @@ export class RelaySourceClient {
       });
       sendResult(result);
     } catch (error) {
-      const text = error instanceof Error ? error.message : String(error);
+      const rawText = error instanceof Error ? error.message : String(error);
       const elapsedMs = Date.now() - invokeStart;
+      if (isPortDisconnectError(rawText)) {
+        // C.1 调用级自愈：归因为 Port 死亡 → 上报编排层 healPort 重建；
+        // 错误文本规范化为结构化错误码，MCP 客户端可识别并自动重试。
+        relayLog('warn', true, this.source.tabId, [
+          `invoke ← ${toolName} FAILED (port dead) in ${String(elapsedMs)}ms: ${rawText} → requesting orchestration heal`,
+        ]);
+        try {
+          this.onPortDead?.(rawText);
+        } catch (callbackError) {
+          relayLog('warn', true, this.source.tabId, ['onPortDead callback threw:', callbackError]);
+        }
+      }
+      const text = normalizePortDisconnectError(rawText);
       relayLog('warn', true, this.source.tabId, [`invoke ← ${toolName} FAILED in ${String(elapsedMs)}ms:`, text]);
       this.onInvokeLog?.('finished', {
         callId,

@@ -1253,6 +1253,56 @@ describe('RelayBridgeServer', () => {
     }
   });
 
+  it('removes the source from the registry on source/disconnected but keeps the socket open', async () => {
+    const bridge = new RelayBridgeServer({
+      host: '127.0.0.1',
+      port: 0,
+      allowedOrigins: ['*'],
+    });
+
+    try {
+      await bridge.start();
+
+      const ws = await connectAndRegister(bridge, {
+        tabId: 'tab-1',
+        url: 'https://example.com',
+        tools: [{ name: 'tool_a', description: 'Tool on a page whose port died' }],
+      });
+
+      const toolAName = await waitFor(() => bridge.registry.listTools()[0]?.name);
+      expect(toolAName).toBeTruthy();
+
+      // 浏览器源报告页面工具 Port 断连
+      ws.send(
+        JSON.stringify({
+          type: 'source/disconnected',
+          reason: 'Attempting to use a disconnected port object',
+        })
+      );
+
+      // 注册表立即移除该源（list_tools 不再显示正常假象），连接保持打开
+      await waitFor(() => (bridge.registry.listSources().length === 0 ? true : undefined));
+      expect(bridge.registry.listTools()).toHaveLength(0);
+
+      // WebSocket 仍可用：重建后重新 hello + tools/list 即可恢复注册
+      ws.send(
+        JSON.stringify({
+          type: 'hello',
+          tabId: 'tab-1',
+          url: 'https://example.com',
+          origin: 'https://example.com',
+        })
+      );
+      ws.send(JSON.stringify({ type: 'tools/list', tools: [{ name: 'tool_a' }] }));
+      const recovered = await waitFor(() => bridge.registry.listTools()[0]?.name);
+      expect(recovered).toBe('tool_a');
+
+      ws.close();
+    } finally {
+      await bridge.stop();
+    }
+  });
+
   it('survives malformed JSON messages without dropping the connection', async () => {
     const bridge = new RelayBridgeServer({
       host: '127.0.0.1',

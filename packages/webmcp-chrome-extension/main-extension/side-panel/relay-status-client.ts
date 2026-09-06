@@ -8,6 +8,7 @@ import {
   RELAY_STATUS_PORT_NAME,
   type RelayInvokeLogEntry,
   type RelayStatusMessage,
+  type RelayStatusRequest,
   type RelayTabStatus,
 } from '../../core/relay-status-protocol';
 
@@ -20,6 +21,11 @@ export interface RelayStatusClient {
   getInvokeLogs(): RelayInvokeLogEntry[];
   /** 调用日志变化回调（快照对齐或增量事件后触发，参数为最新全量数组）。 */
   onInvokeLogs(listener: (entries: RelayInvokeLogEntry[]) => void): () => void;
+  /**
+   * 向 SW 发送控制请求（手动刷新连接等）。连接未就绪时静默丢弃 ——
+   * 刷新类操作语义幂等，重连成功后再点一次即可。
+   */
+  sendRequest(request: RelayStatusRequest): void;
   /** 主动断开（侧边栏卸载时调用）。 */
   disconnect(): void;
 }
@@ -152,6 +158,17 @@ export function connectRelayStatus(
       return () => {
         invokeLogListeners.delete(listener);
       };
+    },
+    sendRequest(request: RelayStatusRequest): void {
+      if (!port || disposed) {
+        console.debug('[relay-status] sendRequest ignored: port not ready', request.type);
+        return;
+      }
+      try {
+        port.postMessage(request);
+      } catch (error) {
+        console.warn('[relay-status] sendRequest failed:', error);
+      }
     },
     disconnect() {
       disposed = true;

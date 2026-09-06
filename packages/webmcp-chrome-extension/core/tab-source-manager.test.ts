@@ -119,6 +119,10 @@ interface ClientStub extends ManagedTabSource {
   /** 触发已注册状态监听器（编排层经此收到连接状态）。 */
   emitStatus(status: RelayConnectionStatus): void;
   statusListeners: Set<(status: RelayConnectionStatus) => void>;
+  /** notifySourceDisconnected 调用记录（C.2 注册表一致性验证）。 */
+  disconnectNotices: string[];
+  /** reconnectRelay 调用次数（relay 连接手动刷新验证）。 */
+  reconnectRelayCalls: number;
 }
 
 type ClientFactory = NonNullable<
@@ -138,6 +142,8 @@ function createClientStubFactory(): {
       stop: vi.fn(),
       updateSource: vi.fn(),
       statusListeners,
+      disconnectNotices: [],
+      reconnectRelayCalls: 0,
       emitStatus: (status) => {
         for (const listener of statusListeners) {
           listener(status);
@@ -148,6 +154,12 @@ function createClientStubFactory(): {
         return () => {
           statusListeners.delete(listener);
         };
+      },
+      notifySourceDisconnected: (reason) => {
+        stub.disconnectNotices.push(reason);
+      },
+      reconnectRelay: () => {
+        stub.reconnectRelayCalls += 1;
       },
     };
     stubs.push(stub);
@@ -565,6 +577,111 @@ describe('startTabSourceManager', () => {
       }
     }
   });
+
+  it('竞态修复：Port 断连先于导航完成时，complete 回调强制重建死 Port 条目', async () => {
+    vi.useFakeTimers();
+    try {
+      const tabsStub = createTabsStub();
+      const { stubs, factory } = createClientStubFactory();
+      const manager = startTabSourceManager({
+        tabsApi: tabsStub,
+        clientFactory: factory,
+        endpointCache: createMemoryCache(),
+      });
+
+      // 建立客户端（模拟 rescan / 首次导航完成）
+      tabsStub.emitUpdated(1, { status: 'complete' }, { id: 1, url: 'https://a.com/', title: 'A' });
+      await vi.waitFor(() => {
+        expect(stubs).toHaveLength(1);
+      });
+
+      // Port 意外死亡（页面 reload 中的旧上下文销毁）→ healPort 排 1s 延迟自愈
+      tabsStub.ports[0]!.disconnect();
+      expect(stubs[0]!.disconnectNotices).toHaveLength(1);
+
+      // 导航完成先于自愈延迟任务：取消 healTimer + 检测死 Port 残留 → 强制重建
+      tabsStub.emitUpdated(1, { status: 'complete' }, { id: 1, url: 'https://a.com/', title: 'A' });
+      await vi.waitFor(() => {
+        expect(stubs).toHaveLength(2);
+      });
+      // 旧条目被 dispose（stop 调用），新条目持有全新 Port
+      expect(stubs[0]!.stop).toHaveBeenCalled();
+      expect(stubs[1]!.start).toHaveBeenCalled();
+      expect(tabsStub.ports).toHaveLength(2);
+
+      // 旧 healPort 延迟任务已被取消：推进时间不再触发额外重建
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(stubs).toHaveLength(2);
+      manager.stop();
+    } finally {
+      if (vi.isFakeTimers()) {
+        vi.useRealTimers();
+      }
+    }
+  });
+
+  it('手动刷新：recreateConnectionForActive 重建 webmcp 连接（新 Port + 新客户端）', async () => {
+    const tabsStub = createTabsStub();
+    tabsStub.tabs.set(1, { id: 1, url: 'https://a.com/', title: 'A' });
+    const { stubs, factory } = createClientStubFactory();
+    const manager = startTabSourceManager({
+      tabsApi: tabsStub,
+      clientFactory: factory,
+      endpointCache: createMemoryCache(),
+    });
+
+    await vi.waitFor(() => {
+      expect(stubs).toHaveLength(1);
+    });
+
+    const recreated = await manager.recreateConnectionForActive('webmcp');
+    expect(recreated).toBe(true);
+    await vi.waitFor(() => {
+      expect(stubs).toHaveLength(2);
+    });
+    // 旧条目销毁 + 全新 Port 建立
+    expect(stubs[0]!.stop).toHaveBeenCalled();
+    expect(stubs[1]!.start).toHaveBeenCalled();
+    expect(tabsStub.ports).toHaveLength(2);
+    manager.stop();
+  });
+
+  it('手动刷新：relay 模式仅重连 WebSocket，不动 Port 与客户端条目', async () => {
+    const tabsStub = createTabsStub();
+    tabsStub.tabs.set(1, { id: 1, url: 'https://a.com/', title: 'A' });
+    const { stubs, factory } = createClientStubFactory();
+    const manager = startTabSourceManager({
+      tabsApi: tabsStub,
+      clientFactory: factory,
+      endpointCache: createMemoryCache(),
+    });
+
+    await vi.waitFor(() => {
+      expect(stubs).toHaveLength(1);
+    });
+
+    const recreated = await manager.recreateConnectionForActive('relay');
+    expect(recreated).toBe(true);
+    expect(stubs[0]!.reconnectRelayCalls).toBe(1);
+    // Port 与客户端条目保持不动
+    expect(stubs).toHaveLength(1);
+    expect(stubs[0]!.stop).not.toHaveBeenCalled();
+    expect(tabsStub.ports).toHaveLength(1);
+    manager.stop();
+  });
+
+  it('手动刷新：目标标签页未登记时返回 false', async () => {
+    const tabsStub = createTabsStub();
+    const { stubs, factory } = createClientStubFactory();
+    const manager = startTabSourceManager({
+      tabsApi: tabsStub,
+      clientFactory: factory,
+      endpointCache: createMemoryCache(),
+    });
+    // 无任何 http(s) 标签页 → 活动标签页不存在
+    expect(await manager.recreateConnectionForActive('webmcp')).toBe(false);
+    manager.stop();
+  });
 });
 
 describe('startRelayStatusPort', () => {
@@ -675,5 +792,28 @@ describe('startRelayStatusPort', () => {
     const port = runtimeStub.emitConnect(RELAY_STATUS_PORT_NAME);
     expect(port.sent).toHaveLength(1);
     expect(port.sent[0]).toEqual({ type: 'snapshot', statuses: [] });
+  });
+
+  it('刷新指令消息分发：webmcp-reconnect/relay-reconnect 转发到 recreateConnectionForActive', async () => {
+    const runtimeStub = createRuntimeStub();
+    const calls: string[] = [];
+    const manager = {
+      getStatuses: () => [],
+      onStatusChange: () => () => undefined,
+      recreateConnectionForActive: async (mode: 'webmcp' | 'relay') => {
+        calls.push(mode);
+        return true;
+      },
+    };
+    startRelayStatusPort(manager as never, runtimeStub as never);
+
+    const port = runtimeStub.emitConnect(RELAY_STATUS_PORT_NAME);
+    port.receive({ type: 'webmcp-reconnect' });
+    port.receive({ type: 'relay-reconnect' });
+    port.receive({ type: 'unknown-command' });
+
+    await vi.waitFor(() => {
+      expect(calls).toEqual(['webmcp', 'relay']);
+    });
   });
 });

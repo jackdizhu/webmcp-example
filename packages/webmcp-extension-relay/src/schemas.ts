@@ -44,6 +44,17 @@ const BrowserPongMessageSchema = z.object({
 });
 
 /**
+ * 浏览器源主动报告页面工具 Port 断连（注册表一致性）：
+ * Port 死亡后注册表里的工具清单是陈旧快照，relay 必须移除该源，
+ * 避免 MCP 客户端「list_tools 看着正常、invoke 必失败」。
+ * WebSocket 保持打开：编排层重建 Port 后客户端会重新 hello + tools/list。
+ */
+const BrowserSourceDisconnectedMessageSchema = z.object({
+  type: z.literal('source/disconnected'),
+  reason: z.string().optional(),
+});
+
+/**
  * Union schema for all browser-to-relay protocol messages.
  */
 export const BrowserToRelayMessageSchema = z.discriminatedUnion('type', [
@@ -52,6 +63,7 @@ export const BrowserToRelayMessageSchema = z.discriminatedUnion('type', [
   BrowserToolsChangedMessageSchema,
   BrowserToolResultMessageSchema,
   BrowserPongMessageSchema,
+  BrowserSourceDisconnectedMessageSchema,
 ]);
 
 /**

@@ -131,12 +131,25 @@ export interface ManagedTabSource {
   updateSource(patch: Partial<RelaySourceMeta>): void;
   /** 订阅连接状态变化（RelaySourceClient 原生支持；测试桩需提供）。 */
   onStatus(listener: (status: RelayConnectionStatus) => void): () => void;
+  /**
+   * 通知 relay 移除本源注册（C.2 注册表一致性；RelaySourceClient 原生支持，
+   * 可选以兼容旧测试桩）。
+   */
+  notifySourceDisconnected?(reason: string): void;
+  /**
+   * 手动重建 SW→relay 的 WebSocket 连接（「relay连接刷新」按钮；可选以兼容旧测试桩）。
+   */
+  reconnectRelay?(): void;
 }
 
 /** 本模块用到的 chrome.tabs API 最小面。 */
 export interface TabsApi {
   get(tabId: number): Promise<{ id?: number; url?: string; title?: string }>;
-  query(queryInfo: { url?: string[] }): Promise<Array<{ id?: number; url?: string; title?: string }>>;
+  query(queryInfo: {
+    url?: string[];
+    active?: boolean;
+    currentWindow?: boolean;
+  }): Promise<Array<{ id?: number; url?: string; title?: string }>>;
   connect(tabId: number, connectInfo?: { name?: string }): chrome.runtime.Port;
   reload(tabId: number): Promise<void>;
   onUpdated: {
@@ -354,6 +367,13 @@ interface TabEntry {
   meta: { url?: string; title?: string };
   /** 标记 Port 为主动断开（编排层释放时调用，自愈逻辑据此区分意外断连）。 */
   markIntentionalDisconnect(): void;
+  /**
+   * Port 死亡标志（onDisconnect 或调用级归因置位，重建条目时复位）。
+   * 修复导航完成竞态的关键：onUpdated(complete) 取消 healPort 延迟任务后，
+   * ensureClient 的「已存在」分支原本仅同步元数据，死 Port 会永久留存 ——
+   * 检测到该标志时必须走 dispose + 重建路径。
+   */
+  isPortDead(): boolean;
 }
 
 /**
@@ -373,6 +393,13 @@ export function startTabSourceManager(options: TabSourceManagerOptions = {}): {
   getInvokeLogs(): RelayInvokeLogEntry[];
   onInvokeLog(listener: (phase: RelayInvokeLogPhase, entry: RelayInvokeLogEntry) => void): () => void;
   recordInvokeLog(phase: RelayInvokeLogPhase, entry: RelayInvokeLogEntry): void;
+  /**
+   * 手动刷新当前活动标签页的连接（侧栏调试页按钮）：
+   * - 'webmcp'：强制重建 SW→页面 Port + 客户端条目；
+   * - 'relay'：仅重建 SW→relay 的 WebSocket。
+   * 返回 false 表示目标标签页未登记或操作失败。
+   */
+  recreateConnectionForActive(mode: 'webmcp' | 'relay'): Promise<boolean>;
 } {
   const tabsApi = options.tabsApi ?? defaultTabsApi();
   const tabFilter = options.tabFilter ?? isHttpUrl;
@@ -462,6 +489,9 @@ export function startTabSourceManager(options: TabSourceManagerOptions = {}): {
             console.warn(`[webmcp-relay-source] tabs.reload(${String(input.tabId)}) failed:`, error);
           });
         },
+        onPortDead: (reason) => {
+          handlePortDead(input.tabId, reason);
+        },
         onInvokeLog: (phase, draft) => {
           recordInvokeLog(phase, { ...draft, tabId: input.tabId });
         },
@@ -480,6 +510,24 @@ export function startTabSourceManager(options: TabSourceManagerOptions = {}): {
     if (statuses.delete(tabId)) {
       emitStatuses();
     }
+  }
+
+  /**
+   * Port 死亡统一处理：先趁 WebSocket 存活通知 relay 移除本源注册（C.2，
+   * 消除「list_tools 看着正常、调必失败」的注册表漂移），再启动自愈重建。
+   * healPort 内部有 healTimers 防重入，重复触发安全。
+   */
+  function handlePortDead(tabId: number, reason: string): void {
+    const entry = entries.get(tabId);
+    if (!entry) {
+      return;
+    }
+    try {
+      entry.client.notifySourceDisconnected?.(reason);
+    } catch (error) {
+      console.warn(`${DIAG_TAG} tab ${String(tabId)} notifySourceDisconnected failed:`, error);
+    }
+    healPort(tabId, reason);
   }
 
   /**
@@ -571,9 +619,13 @@ export function startTabSourceManager(options: TabSourceManagerOptions = {}): {
     // 页面侧无接收方（"Receiving end does not exist"）或导航导致旧上下文死亡时，
     // hello 握手会因 listTools 失败进入重连死循环，必须重建 Port 所在的整个客户端。
     let intentionalDisconnect = false;
+    // Port 死亡标志（竞态修复）：onUpdated(complete) 可能先于 healPort 延迟任务
+    // 执行并取消自愈 —— 此时 entry 仍持有死 Port，导航完成路径据此强制重建。
+    let portDead = false;
     port.onDisconnect.addListener(() => {
       const lastError = safeChromeLastError();
       const message = lastError?.message ?? '';
+      portDead = true;
       console.warn(
         `${DIAG_TAG} tab ${String(tabId)} page-tools Port 断连${message ? `: ${message}` : ''}` +
           (/receiving end/i.test(message)
@@ -583,7 +635,7 @@ export function startTabSourceManager(options: TabSourceManagerOptions = {}): {
       if (intentionalDisconnect) {
         return;
       }
-      healPort(tabId, message);
+      handlePortDead(tabId, message);
     });
     const { facade, disconnect } = createPortToolsFacade(port, `tab ${String(tabId)}`);
     // exactOptionalPropertyTypes：可选字段仅在存在时写入，避免写入显式 undefined
@@ -605,6 +657,7 @@ export function startTabSourceManager(options: TabSourceManagerOptions = {}): {
       markIntentionalDisconnect: () => {
         intentionalDisconnect = true;
       },
+      isPortDead: () => portDead,
     });
   }
 
@@ -629,6 +682,13 @@ export function startTabSourceManager(options: TabSourceManagerOptions = {}): {
     console.info(
       `${DIAG_TAG} 导航完成 tab ${String(tabId)}: changeInfo.url=${changeInfo.url ?? '<none>'}, tab.url=${tab.url ?? '<undefined>'} → 登记 URL=${url ?? '<undefined，将跳过>'}`
     );
+    // 竞态修复：Port 死亡事件先于导航完成时，healPort 延迟任务被上面取消，
+    // entry 里残留死 Port —— ensureClient 的「已存在」分支只同步元数据不会重建，
+    // 死 Port 将永久留存（所有 invoke 报 disconnected port）。检测到必须强制重建。
+    if (entries.get(tabId)?.isPortDead()) {
+      console.info(`${DIAG_TAG} tab ${String(tabId)} 导航完成发现死 Port 残留 → 强制重建客户端`);
+      disposeClient(tabId);
+    }
     if (entries.has(tabId) && !tabFilter(url)) {
       disposeClient(tabId);
       return;
@@ -667,6 +727,52 @@ export function startTabSourceManager(options: TabSourceManagerOptions = {}): {
       console.warn('[webmcp-relay-source] tab rescan failed:', error);
     });
 
+  /**
+   * 手动重建指定标签页的连接（侧栏刷新按钮入口）：
+   * - webmcp：强制销毁整个客户端条目（Port + RelaySourceClient）后全新重建，
+   *   不依赖 Port 死亡事件，对「死 Port 残留」状态始终有效；
+   * - relay：仅重建 SW→relay 的 WebSocket（重新发现握手），Port 保持不动。
+   */
+  async function recreateConnection(tabId: number, mode: 'webmcp' | 'relay'): Promise<boolean> {
+    const entry = entries.get(tabId);
+    if (!entry) {
+      console.warn(`${DIAG_TAG} recreateConnection: tab ${String(tabId)} 未登记，跳过`);
+      return false;
+    }
+    if (mode === 'relay') {
+      try {
+        entry.client.reconnectRelay?.();
+        return true;
+      } catch (error) {
+        console.warn(`${DIAG_TAG} tab ${String(tabId)} reconnectRelay failed:`, error);
+        return false;
+      }
+    }
+    const { url, title } = entry.meta;
+    console.info(`${DIAG_TAG} tab ${String(tabId)} 手动重建 webmcp 连接（Port + 客户端）`);
+    recreateAttempts.delete(tabId);
+    const pendingHeal = healTimers.get(tabId);
+    if (pendingHeal !== undefined) {
+      clearTimeout(pendingHeal);
+      healTimers.delete(tabId);
+    }
+    disposeClient(tabId);
+    ensureClient(tabId, url, title);
+    return true;
+  }
+
+  /** 取当前窗口活动标签页 id（手动刷新按钮目标；取不到返回 null）。 */
+  async function getActiveTabId(): Promise<number | null> {
+    try {
+      const tabs = await tabsApi.query({ active: true, currentWindow: true });
+      const active = tabs.find((tab) => tab.id !== undefined);
+      return active?.id ?? null;
+    } catch (error) {
+      console.warn(`${DIAG_TAG} 获取活动标签页失败:`, error);
+      return null;
+    }
+  }
+
   return {
     stop: () => {
       tabsApi.onUpdated.removeListener(onUpdated);
@@ -695,6 +801,17 @@ export function startTabSourceManager(options: TabSourceManagerOptions = {}): {
       };
     },
     recordInvokeLog,
+    /**
+     * 手动刷新当前活动标签页的连接（侧栏调试页按钮）。
+     * 返回 false 表示目标标签页未登记或操作失败。
+     */
+    recreateConnectionForActive: async (mode: 'webmcp' | 'relay'): Promise<boolean> => {
+      const tabId = await getActiveTabId();
+      if (tabId === null) {
+        return false;
+      }
+      return recreateConnection(tabId, mode);
+    },
   };
 }
 
@@ -710,6 +827,8 @@ export function startRelayStatusPort(
     onStatusChange(listener: (statuses: RelayTabStatus[]) => void): () => void;
     getInvokeLogs?(): RelayInvokeLogEntry[];
     onInvokeLog?(listener: (phase: RelayInvokeLogPhase, entry: RelayInvokeLogEntry) => void): () => void;
+    /** 手动刷新活动标签页连接（调试页「webmcp连接刷新 / relay连接刷新」按钮）。 */
+    recreateConnectionForActive?(mode: 'webmcp' | 'relay'): Promise<boolean>;
   },
   runtimeApi: Pick<typeof chrome.runtime, 'onConnect'> = chrome.runtime
 ): { stop(): void } {
@@ -743,6 +862,17 @@ export function startRelayStatusPort(
         message.type === 'subscribe'
       ) {
         send({ type: 'snapshot', statuses: manager.getStatuses() });
+        return;
+      }
+      // 手动刷新按钮：重建活动标签页的 SW→页面 Port 或 SW→relay WebSocket；
+      // 结果经状态快照自动推送（重建过程中的状态迁移会触发 onStatusChange）
+      if (
+        typeof message === 'object' &&
+        message !== null &&
+        (message.type === 'webmcp-reconnect' || message.type === 'relay-reconnect')
+      ) {
+        const mode = message.type === 'webmcp-reconnect' ? 'webmcp' : 'relay';
+        void manager.recreateConnectionForActive?.(mode);
       }
     });
     port.onDisconnect.addListener(() => {

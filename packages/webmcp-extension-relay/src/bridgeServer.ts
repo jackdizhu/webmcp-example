@@ -814,6 +814,19 @@ export class RelayBridgeServer extends EventEmitter {
       case 'pong':
         this.lastPongByConnectionId.set(connectionId, Date.now());
         break;
+
+      case 'source/disconnected': {
+        // C.2 注册表一致性：浏览器源报告页面工具 Port 断连，立即移除注册，
+        // 使 list_sources/list_tools 如实反映死源（MCP 客户端可据此刷新重试）。
+        // WebSocket 保持打开：编排层重建 Port 后客户端会重新 hello + tools/list。
+        const reason = message.reason ?? 'unknown';
+        process.stderr.write(
+          `[webmcp-extension-relay] source ${connectionId} reported port disconnected (${reason}), removing from registry\n`
+        );
+        this.registry.removeConnection(connectionId);
+        this.emit('stateChanged');
+        break;
+      }
     }
   }
 

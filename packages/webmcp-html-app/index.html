@@ -1,13 +1,87 @@
 <!doctype html>
-<html lang="en">
-  <head>
-    <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <link rel="icon" href="data:," />
-    <title>vanilla</title>
+<html lang="zh-CN" data-page-node-id="NPzfyGQP3vudYDXJnIoLKq">
+  <head data-page-node-id="5yrQyYHcUKhwwrCAy2JcaB">
+    <meta charset="UTF-8" data-page-node-id="Dux7k5gvHp5LG8sTPxqvMM" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" data-page-node-id="2fLpVcYXxGphEbpljZtjIO" />
+    <link rel="icon" href="data:," data-page-node-id="DlvGT740ha0g19D423q2UC" />
+    <title>WebMCP 表单填充 Demo</title>
+    <style>
+      :root {
+        --bg: #f5f7fa;
+        --card: #ffffff;
+        --border: #e2e8f0;
+        --text: #1f2933;
+        --muted: #64748b;
+        --accent: #2563eb;
+        --agent: #fde68a;
+      }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        font-family: system-ui, -apple-system, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+        background: var(--bg);
+        color: var(--text);
+        padding: 24px;
+      }
+      h1 { font-size: 22px; margin: 0 0 4px; }
+      .subtitle { color: var(--muted); margin: 0 0 20px; font-size: 14px; }
+      #demo-root { display: flex; flex-direction: column; gap: 16px; max-width: 960px; }
+      .card {
+        background: var(--card);
+        border: 1px solid var(--border);
+        border-radius: 12px;
+        padding: 18px 20px;
+        box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04);
+      }
+      /* 栅格布局：每行 4 项筛选条件，窄屏自动降列；label 与输入组件同行 */
+      .ff-form { display: grid; grid-template-columns: repeat(4, 1fr); gap: 14px 16px; }
+      .ff-field { display: flex; flex-direction: row; align-items: center; gap: 8px; min-width: 0; }
+      .ff-field-inline { margin-top: auto; }
+      .ff-label {
+        font-size: 13px;
+        color: var(--muted);
+        font-weight: 600;
+        white-space: nowrap;
+        flex-shrink: 0;
+        width: 84px;
+        text-align: right;
+      }
+      .ff-required { color: #ef4444; }
+      .ff-input {
+        width: 100%;
+        min-width: 0;
+        flex: 1;
+        font-size: 14px;
+        padding: 8px 10px;
+        border: 1px solid var(--border);
+        border-radius: 8px;
+      }
+      .ff-checkbox { width: 16px; height: 16px; accent-color: var(--accent); flex-shrink: 0; }
+      @media (max-width: 860px) { .ff-form { grid-template-columns: repeat(2, 1fr); } }
+      @media (max-width: 460px) { .ff-form { grid-template-columns: 1fr; } }
+      /* AI 填充高亮：区分「AI 填的」与「自己填的」 */
+      .ff-agent-filled { outline: 2px solid var(--agent); border-color: var(--agent); background: #fffbeb; }
+      .ff-submit, .ff-sim {
+        background: var(--accent);
+        color: #fff;
+        border: none;
+        border-radius: 8px;
+        padding: 9px 16px;
+        font-size: 14px;
+        cursor: pointer;
+      }
+      .ff-sim { align-self: flex-start; }
+      .ff-submit { grid-column: 1 / -1; justify-self: start; }
+      .ff-sim { background: #f59e0b; }
+      .ff-submit:hover, .ff-sim:hover { filter: brightness(0.95); }
+      .ff-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+      .ff-table th, .ff-table td { border: 1px solid var(--border); padding: 8px 10px; text-align: left; }
+      .ff-table th { background: #f1f5f9; font-weight: 600; }
+      .ff-table-empty { color: var(--muted); font-size: 13px; margin: 0; }
+    </style>
   </head>
-  <body>
-    <div id="app"></div>
+  <body data-page-node-id="zcR5GwPwhEbCUwTh6uhESO">
+    <div id="app" data-page-node-id="f62ECbl8YamZ2CcYVDihCu"></div>
     <script type="module" src="/src/main.ts"></script>
   </body>
 </html>

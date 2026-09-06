@@ -31,10 +31,25 @@ export type RelayStatusMessage =
   | { type: 'invoke-log'; phase: RelayInvokeLogPhase; entry: RelayInvokeLogEntry };
 
 /** 侧边栏 → SW 的消息。 */
-export type RelayStatusRequest = {
-  /** 请求立即重发一次全量快照（重连后对齐用）。 */
-  type: 'subscribe';
-};
+export type RelayStatusRequest =
+  | {
+      /** 请求立即重发一次全量快照（重连后对齐用）。 */
+      type: 'subscribe';
+    }
+  | {
+      /**
+       * 手动重建活动标签页的 SW→页面 Port 连接（「webmcp连接刷新」按钮）：
+       * SW 强制销毁该页的 Port + RelaySourceClient 条目后全新重建。
+       */
+      type: 'webmcp-reconnect';
+    }
+  | {
+      /**
+       * 手动重建活动标签页的 SW→relay WebSocket 连接（「relay连接刷新」按钮）：
+       * 关闭现有 WebSocket 并重新全范围发现握手，Port 保持不动。
+       */
+      type: 'relay-reconnect';
+    };
 
 // ---- relay 调用日志（侧栏「relay 调用」页只读展示）----
 

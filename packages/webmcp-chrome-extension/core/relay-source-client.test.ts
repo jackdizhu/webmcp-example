@@ -291,6 +291,120 @@ describe('RelaySourceClient 运行期消息', () => {
     client.stop();
   });
 
+  it('callTool 报 Port 断连时触发 onPortDead 并回传 SOURCE_PORT_DISCONNECTED 错误码', async () => {
+    const onPortDead = vi.fn();
+    const { client, socket } = await connectAccepted(
+      {
+        callTool: vi.fn(async () => {
+          throw new Error('Attempting to use a disconnected port object');
+        }),
+      },
+      { onPortDead }
+    );
+    socket.receive({ type: 'invoke', callId: 'call-port-dead', toolName: 'boom', args: {} });
+
+    await vi.waitFor(() => {
+      expect(onPortDead).toHaveBeenCalledTimes(1);
+      expect(onPortDead).toHaveBeenCalledWith('Attempting to use a disconnected port object');
+    });
+    const result = JSON.parse(socket.sent.find((m) => m.includes('"type":"result"'))!) as {
+      result: { content: Array<{ text: string }> };
+    };
+    expect(result.result.content[0]!.text).toContain('SOURCE_PORT_DISCONNECTED');
+    client.stop();
+  });
+
+  it('握手前 listTools 失败（Port 死亡）时触发 onPortDead，不再进入静默重连', async () => {
+    const onPortDead = vi.fn();
+    const facade = createFacadeStub({
+      listTools: vi.fn(async () => {
+        throw new Error('Attempting to use a disconnected port object');
+      }),
+    });
+    const client = createClient({ facade, autoConnect: false, onPortDead });
+    client.start();
+
+    await vi.waitFor(() => {
+      expect(FakeSocket.instances).toHaveLength(1);
+    });
+    const socket = FakeSocket.instances[0]!;
+    socket.receive({
+      type: 'server-hello',
+      service: 'webmcp-extension-relay',
+      version: 1,
+      host: '127.0.0.1',
+      instanceId: 'inst-1',
+      port: 9333,
+    });
+
+    await vi.waitFor(() => {
+      expect(onPortDead).toHaveBeenCalledTimes(1);
+      expect(onPortDead).toHaveBeenCalledWith('Attempting to use a disconnected port object');
+    });
+    // 握手失败后 socket 被关闭（编排层负责重建 Port，而非无限重连）
+    expect(socket.closed).toBe(true);
+    client.stop();
+  });
+
+  it('notifySourceDisconnected 在握手接受后向 relay 发送 source/disconnected', async () => {
+    const { client, socket } = await connectAccepted();
+    client.notifySourceDisconnected('page-tools port dead');
+
+    const notice = socket.sent.find((m) => m.includes('"type":"source/disconnected"'));
+    expect(notice).toBeDefined();
+    expect(JSON.parse(notice!)).toMatchObject({ type: 'source/disconnected', reason: 'page-tools port dead' });
+    client.stop();
+  });
+
+  it('notifySourceDisconnected 在握手未接受时静默跳过（不发送任何消息）', async () => {
+    const facade = createFacadeStub();
+    const client = createClient({ facade, autoConnect: false });
+    client.start();
+    await vi.waitFor(() => {
+      expect(FakeSocket.instances).toHaveLength(1);
+    });
+    // 仅收到 server-hello，尚未 hello/accepted
+    const socket = FakeSocket.instances[0]!;
+    socket.receive({
+      type: 'server-hello',
+      service: 'webmcp-extension-relay',
+      version: 1,
+      host: '127.0.0.1',
+      instanceId: 'inst-1',
+      port: 9333,
+    });
+    await flushAsync();
+    client.notifySourceDisconnected('too early');
+
+    expect(socket.sent.find((m) => m.includes('"type":"source/disconnected"'))).toBeUndefined();
+    client.stop();
+  });
+
+  it('reconnectRelay 关闭旧连接并重新发现握手', async () => {
+    const { client, socket } = await connectAccepted();
+    client.reconnectRelay();
+
+    // 旧 socket 关闭，新 socket 建立并重新走 server-hello → hello 握手
+    expect(socket.closed).toBe(true);
+    await vi.waitFor(() => {
+      expect(FakeSocket.instances.length).toBeGreaterThanOrEqual(2);
+    });
+    const next = FakeSocket.instances[FakeSocket.instances.length - 1]!;
+    next.receive({
+      type: 'server-hello',
+      service: 'webmcp-extension-relay',
+      version: 1,
+      host: '127.0.0.1',
+      instanceId: 'inst-1',
+      port: 9333,
+    });
+    await flushAsync();
+    await vi.waitFor(() => {
+      expect(next.sent.some((m) => m.includes('"type":"hello"'))).toBe(true);
+    });
+    client.stop();
+  });
+
   it('ping 回 pong', async () => {
     const { client, socket } = await connectAccepted();
     socket.receive({ type: 'ping' });

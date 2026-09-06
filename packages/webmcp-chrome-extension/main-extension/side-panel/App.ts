@@ -421,6 +421,7 @@ export const App = defineComponent({
               pageTools: pageToolsRef.value,
               active: activeTab.value === 'debug',
               locked: locked.value,
+              relayStatus: relayStatusClient,
               onHandoff: (run: DebugRun) => {
                 void handleHandoff(run);
               },
