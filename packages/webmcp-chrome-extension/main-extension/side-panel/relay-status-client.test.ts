@@ -1,7 +1,7 @@
 // relay-status-client 单测：状态快照 + 调用日志（invoke-logs 全量对齐 / invoke-log 增量合并）。
 import { describe, expect, it, vi } from 'vitest';
 
-import type { RelayStatusMessage } from '../../../core/relay-status-protocol';
+import type { RelayInvokeLogEntry, RelayStatusMessage } from '../../core/relay-status-protocol';
 import { connectRelayStatus } from './relay-status-client';
 
 /** 状态端口桩：服务端（SW）视角可 postMessage / emit。 */
@@ -37,7 +37,7 @@ class FakePort {
   }
 }
 
-function createEntry(callId: string, overrides: Record<string, unknown> = {}): Record<string, unknown> {
+function createEntry(callId: string, overrides: Partial<RelayInvokeLogEntry> = {}): RelayInvokeLogEntry {
   return {
     callId,
     tabId: 42,

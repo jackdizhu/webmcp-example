@@ -279,3 +279,65 @@ describe('connectPageTools 断线自动重连', () => {
     delete (globalThis as unknown as { chrome?: unknown }).chrome;
   });
 });
+
+describe('loadSettings / saveSettings', () => {
+  const makeStorage = (initial: Record<string, unknown> = {}) => {
+    const data: Record<string, unknown> = { ...initial };
+    return {
+      get: async (keys?: string | string[] | null) => {
+        if (keys === null || keys === undefined) return { ...data };
+        const list = Array.isArray(keys) ? keys : [keys];
+        const out: Record<string, unknown> = {};
+        for (const key of list) if (key in data) out[key] = data[key];
+        return out;
+      },
+      set: async (patch: Record<string, unknown>) => {
+        for (const [key, value] of Object.entries(patch)) data[key] = value;
+      },
+    };
+  };
+
+  it('缺省时回退内置默认（含 systemPrompt 与 maxHistoryTurns）', async () => {
+    const storage = makeStorage();
+    const settings = await import('./panel-client').then((m) => m.loadSettings(storage));
+    expect(settings.systemPrompt).toBe(
+      '你是浏览器页面 WebMCP 工具验证助手。用户会要求你验证当前页面暴露的工具；' +
+        '请优先调用页面工具并基于真实返回结果回答，不要编造工具执行结果。'
+    );
+    expect(settings.maxHistoryTurns).toBe(5);
+  });
+
+  it('systemPrompt 缺失/非字符串回退默认；maxHistoryTurns 非整数回退默认', async () => {
+    const storage = makeStorage({
+      llmSystemPrompt: 123,
+      agentMaxHistoryTurns: 'not-a-number',
+    });
+    const { loadSettings } = await import('./panel-client');
+    const settings = await loadSettings(storage);
+    expect(settings.systemPrompt).toBe(
+      '你是浏览器页面 WebMCP 工具验证助手。用户会要求你验证当前页面暴露的工具；' +
+        '请优先调用页面工具并基于真实返回结果回答，不要编造工具执行结果。'
+    );
+    expect(settings.maxHistoryTurns).toBe(5);
+  });
+
+  it('保存后读取往返一致', async () => {
+    const storage = makeStorage();
+    const { loadSettings, saveSettings } = await import('./panel-client');
+    await saveSettings(
+      {
+        apiKey: 'sk-x',
+        baseUrl: 'https://example.com/v1',
+        model: 'm',
+        debugMode: true,
+        consoleOutput: true,
+        systemPrompt: '自定义提示词',
+        maxHistoryTurns: 3,
+      },
+      storage
+    );
+    const settings = await loadSettings(storage);
+    expect(settings.systemPrompt).toBe('自定义提示词');
+    expect(settings.maxHistoryTurns).toBe(3);
+  });
+});

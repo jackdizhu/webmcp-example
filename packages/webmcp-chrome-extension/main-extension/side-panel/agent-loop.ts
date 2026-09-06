@@ -91,6 +91,29 @@ export interface AgentLoopResult {
   transcript: ChatMessage[];
 }
 
+/**
+ * 按「轮」裁剪历史，保留最近 maxTurns 轮（一轮 = 1 条 user 消息 + 其后全部 assistant/tool 消息）。
+ *
+ * 设计动机：history 中 assistant 消息可能携带 tool_calls，其后必须紧跟对应 toolCallId 的 tool 消息
+ * （OpenAI 兼容协议）。按条数裁剪会切出孤儿 tool 消息导致 API 报错，因此裁剪单位必须为「轮」，
+ * 且切点落在 user 消息上——保证 assistant tool_calls 与 tool 消息的配对完整。
+ *
+ * 边界：maxTurns <= 0（或非法非整数）表示不裁剪，原样返回浅拷贝；轮数不足 maxTurns 时同样原样返回。
+ *
+ * @param history 待裁剪的历史（不含 system 消息）
+ * @param maxTurns 保留最近轮数；0/负数/小数 = 不裁剪
+ */
+export function trimHistory(history: readonly ChatMessage[], maxTurns: number): ChatMessage[] {
+  if (!Number.isInteger(maxTurns) || maxTurns <= 0) return [...history];
+  const turnStarts: number[] = [];
+  history.forEach((message, index) => {
+    if (message.role === 'user') turnStarts.push(index);
+  });
+  if (turnStarts.length <= maxTurns) return [...history];
+  // 从倒数第 maxTurns 个 user 消息起切片：切点必为 user，天然满足协议配对完整性
+  return history.slice(turnStarts[turnStarts.length - maxTurns]);
+}
+
 /** 安全解析工具入参 JSON，失败返回 null。 */
 function parseToolArgs(raw: string): Record<string, unknown> | null {
   try {

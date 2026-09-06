@@ -51,11 +51,59 @@ export const SettingsPanel = defineComponent({
         h('span', text),
       ]);
 
+    const textareaInput = (
+      label: string,
+      key: 'systemPrompt',
+      attrs: { placeholder: string; rows: number }
+    ): VNode =>
+      h('label', { class: 'settings-field' }, [
+        h('span', label),
+        h('textarea', {
+          class: 'settings-textarea',
+          rows: attrs.rows,
+          placeholder: attrs.placeholder,
+          value: props.settings[key],
+          onInput: (event: Event) => {
+            props.settings[key] = (event.target as HTMLTextAreaElement).value;
+          },
+        }),
+      ]);
+
+    const numberInput = (
+      label: string,
+      key: 'maxHistoryTurns',
+      attrs: { min: number; step: number; hint: string }
+    ): VNode =>
+      h('label', { class: 'settings-field' }, [
+        h('span', label),
+        h('input', {
+          type: 'number',
+          min: attrs.min,
+          step: attrs.step,
+          value: props.settings[key],
+          onInput: (event: Event) => {
+            const raw = (event.target as HTMLInputElement).value;
+            const parsed = Number.parseInt(raw, 10);
+            props.settings[key] = Number.isInteger(parsed) && parsed >= attrs.min ? parsed : attrs.min;
+          },
+        }),
+        h('p', { class: 'settings-hint' }, attrs.hint),
+      ]);
+
     return () =>
       h('section', { class: 'settings' }, [
         textInput('API Key', 'apiKey', { type: 'password', placeholder: 'sk-...', autocomplete: 'off' }),
-        textInput('Base URL', 'baseUrl', { type: 'text', placeholder: 'https://api.deepseek.com/v1' }),
-        textInput('模型', 'model', { type: 'text', placeholder: 'deepseek-chat' }),
+        textInput('Base URL', 'baseUrl', { type: 'text', placeholder: 'https://api.deepseek.com' }),
+        textInput('模型', 'model', { type: 'text', placeholder: 'deepseek-v4-flash' }),
+        textareaInput('系统提示词', 'systemPrompt', {
+          placeholder: '留空则使用内置的页面工具验证助手提示词',
+          rows: 4,
+        }),
+        numberInput('历史对话轮数上限', 'maxHistoryTurns', {
+          min: 0,
+          step: 1,
+          hint: '每轮发送给 LLM 的历史对话轮数上限（默认 5，0 = 不裁剪）。裁剪以轮为单位，工具执行结果随所属轮一并裁剪，可显著降低 token 消耗。',
+        }),
         checkbox('debugMode', '调试模式（侧栏打开时默认进入「tools 调试」页）'),
         // 快速切换：无 Key 用户的一键直达入口（立即生效，不依赖「保存」按钮）
         h(

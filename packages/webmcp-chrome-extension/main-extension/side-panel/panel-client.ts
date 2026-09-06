@@ -8,6 +8,7 @@ import {
   type PageToolsRequest,
   type PageToolsResponse,
 } from '../../core/page-tools-bridge';
+import { DEFAULT_SYSTEM_PROMPT } from './agent-loop';
 
 export interface PageToolsClient {
   /** 获取当前页面暴露的工具清单。 */
@@ -31,17 +32,31 @@ export interface PanelSettings {
   debugMode: boolean;
   /** 控制台输出：开启后日志同步打印到控制台（带 traceId 前缀）；默认关，仅写 IndexedDB。 */
   consoleOutput: boolean;
+  /** agent 系统提示词；为空串时使用内置默认的页面工具验证助手提示词。 */
+  systemPrompt: string;
+  /** 每轮发送给 LLM 的历史对话轮数上限（0 = 不裁剪）；默认 5。 */
+  maxHistoryTurns: number;
 }
 
 export const DEFAULT_SETTINGS: PanelSettings = {
   apiKey: '',
-  baseUrl: 'https://api.deepseek.com/v1',
-  model: 'deepseek-chat',
+  baseUrl: 'https://api.deepseek.com',
+  model: 'deepseek-v4-flash',
   debugMode: false,
   consoleOutput: false,
+  systemPrompt: DEFAULT_SYSTEM_PROMPT,
+  maxHistoryTurns: 5,
 };
 
-const SETTINGS_KEYS = ['llmApiKey', 'llmBaseUrl', 'llmModel', 'debugMode', 'consoleOutput'] as const;
+const SETTINGS_KEYS = [
+  'llmApiKey',
+  'llmBaseUrl',
+  'llmModel',
+  'debugMode',
+  'consoleOutput',
+  'llmSystemPrompt',
+  'agentMaxHistoryTurns',
+] as const;
 
 /**
  * 读取并消费 chrome.runtime.lastError。
@@ -94,6 +109,12 @@ export async function loadSettings(storage: {
     model: typeof stored['llmModel'] === 'string' ? stored['llmModel'] : DEFAULT_SETTINGS.model,
     debugMode: stored['debugMode'] === true,
     consoleOutput: stored['consoleOutput'] === true,
+    systemPrompt:
+      typeof stored['llmSystemPrompt'] === 'string' ? stored['llmSystemPrompt'] : DEFAULT_SETTINGS.systemPrompt,
+    maxHistoryTurns:
+      typeof stored['agentMaxHistoryTurns'] === 'number' && Number.isInteger(stored['agentMaxHistoryTurns'])
+        ? stored['agentMaxHistoryTurns']
+        : DEFAULT_SETTINGS.maxHistoryTurns,
   };
 }
 
@@ -108,6 +129,8 @@ export async function saveSettings(
     llmModel: settings.model,
     debugMode: settings.debugMode,
     consoleOutput: settings.consoleOutput,
+    llmSystemPrompt: settings.systemPrompt,
+    agentMaxHistoryTurns: settings.maxHistoryTurns,
   });
 }
 
