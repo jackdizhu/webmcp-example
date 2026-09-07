@@ -27,6 +27,8 @@ export interface PageToolsClient {
 export interface PanelSettings {
   apiKey: string;
   baseUrl: string;
+  /** chat completions 请求路径；空串 = 用户显式清空（不回退默认，发请求前会提示配置）。 */
+  apiPath: string;
   model: string;
   /** 调试模式：开启后侧栏出现「调试」Tab（手动执行工具，不经 LLM）。 */
   debugMode: boolean;
@@ -41,6 +43,7 @@ export interface PanelSettings {
 export const DEFAULT_SETTINGS: PanelSettings = {
   apiKey: '',
   baseUrl: 'https://api.deepseek.com',
+  apiPath: '/chat/completions',
   model: 'deepseek-v4-flash',
   debugMode: false,
   consoleOutput: false,
@@ -51,6 +54,7 @@ export const DEFAULT_SETTINGS: PanelSettings = {
 const SETTINGS_KEYS = [
   'llmApiKey',
   'llmBaseUrl',
+  'llmApiPath',
   'llmModel',
   'debugMode',
   'consoleOutput',
@@ -106,6 +110,8 @@ export async function loadSettings(storage: {
   return {
     apiKey: typeof stored['llmApiKey'] === 'string' ? stored['llmApiKey'] : DEFAULT_SETTINGS.apiKey,
     baseUrl: typeof stored['llmBaseUrl'] === 'string' ? stored['llmBaseUrl'] : DEFAULT_SETTINGS.baseUrl,
+    // 空串是"显式清空"的合法值，必须保留：仅缺省（非字符串）时才回退默认路径
+    apiPath: typeof stored['llmApiPath'] === 'string' ? stored['llmApiPath'] : DEFAULT_SETTINGS.apiPath,
     model: typeof stored['llmModel'] === 'string' ? stored['llmModel'] : DEFAULT_SETTINGS.model,
     debugMode: stored['debugMode'] === true,
     consoleOutput: stored['consoleOutput'] === true,
@@ -126,6 +132,7 @@ export async function saveSettings(
   await storage.set({
     llmApiKey: settings.apiKey,
     llmBaseUrl: settings.baseUrl,
+    llmApiPath: settings.apiPath,
     llmModel: settings.model,
     debugMode: settings.debugMode,
     consoleOutput: settings.consoleOutput,

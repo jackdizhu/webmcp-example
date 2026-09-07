@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { createOpenAiCompatClient, toWireMessages, toWireTools } from './llm-client';
+import { API_PATH_EMPTY_HINT, createOpenAiCompatClient, toWireMessages, toWireTools } from './llm-client';
 import type { AgentTool } from './agent-loop';
 
 const fetchStub = vi.fn<typeof fetch>();
@@ -27,6 +27,39 @@ describe('createOpenAiCompatClient', () => {
     };
     expect(body.model).toBe('test-model');
     expect(body.tools[0]?.function.name).toBe('get_status');
+  });
+
+  it('apiPath 未配置时回退默认 /chat/completions', async () => {
+    fetchStub.mockResolvedValue(new Response(JSON.stringify({ choices: [{ message: { content: 'ok' } }] }), { status: 200 }));
+    const client = createOpenAiCompatClient({ apiKey: 'k', baseUrl: 'https://api.example.com/v1', model: 'm' }, fetchStub);
+
+    await client.complete([{ role: 'user', content: 'hi' }], []);
+
+    const [url] = fetchStub.mock.calls[0] as unknown as [string, RequestInit];
+    expect(url).toBe('https://api.example.com/v1/chat/completions');
+  });
+
+  it('apiPath 自定义路径生效并自动补全前导斜杠', async () => {
+    fetchStub.mockResolvedValue(new Response(JSON.stringify({ choices: [{ message: { content: 'ok' } }] }), { status: 200 }));
+    const client = createOpenAiCompatClient(
+      { apiKey: 'k', baseUrl: 'https://api.example.com', apiPath: 'v1/chat/completions', model: 'm' },
+      fetchStub
+    );
+
+    await client.complete([{ role: 'user', content: 'hi' }], []);
+
+    const [url] = fetchStub.mock.calls[0] as unknown as [string, RequestInit];
+    expect(url).toBe('https://api.example.com/v1/chat/completions');
+  });
+
+  it('apiPath 显式空串不回退默认路径，直接抛出配置提示且不发请求', async () => {
+    const client = createOpenAiCompatClient(
+      { apiKey: 'k', baseUrl: 'https://api.example.com', apiPath: '', model: 'm' },
+      fetchStub
+    );
+
+    await expect(client.complete([{ role: 'user', content: 'hi' }], [])).rejects.toThrow(API_PATH_EMPTY_HINT);
+    expect(fetchStub).not.toHaveBeenCalled();
   });
 
   it('无工具时省略 tools 字段以兼容敏感服务端', async () => {

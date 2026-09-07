@@ -4,11 +4,20 @@
 import type { AgentTool, ChatMessage, LlmChatClient } from './agent-loop';
 import { logEvent } from './logger';
 
+/** apiPath 显式配置为空串时的提示文案（不回退默认路径，阻断请求）。 */
+export const API_PATH_EMPTY_HINT = '请配置apiPath，如：/chat/completions';
+
 /** LLM 服务配置（API Key 存 chrome.storage.local，禁止硬编码）。 */
 export interface LlmConfig {
   apiKey: string;
-  /** 形如 https://api.deepseek.com 的基础地址（不含 /chat/completions；最终请求端点为 baseUrl + '/chat/completions'）。 */
+  /** 形如 https://api.deepseek.com 的基础地址（不含请求路径；最终端点为 baseUrl + apiPath）。 */
   baseUrl: string;
+  /**
+   * chat completions 请求路径，拼接在 baseUrl 之后。
+   * - 未提供（undefined）：回退默认 '/chat/completions'（兼容存量配置）。
+   * - 显式空串：不回退默认路径，请求前直接抛出 API_PATH_EMPTY_HINT 提示。
+   */
+  apiPath?: string;
   model: string;
 }
 
@@ -75,7 +84,11 @@ export function toWireTools(tools: readonly AgentTool[]): Array<{
 export function createOpenAiCompatClient(config: LlmConfig, fetchImpl: typeof fetch = fetch): LlmChatClient {
   return {
     async complete(messages, tools, signal) {
-      const url = `${config.baseUrl.replace(/\/+$/, '')}/chat/completions`;
+      // apiPath 语义：undefined 回退默认路径；显式空串不回退，阻断请求并提示配置
+      const apiPath = config.apiPath ?? '/chat/completions';
+      if (apiPath.trim().length === 0) throw new Error(API_PATH_EMPTY_HINT);
+      const path = apiPath.startsWith('/') ? apiPath : `/${apiPath}`;
+      const url = `${config.baseUrl.replace(/\/+$/, '')}${path}`;
       const body: Record<string, unknown> = {
         model: config.model,
         messages: toWireMessages(messages),

@@ -321,6 +321,16 @@ describe('loadSettings / saveSettings', () => {
     expect(settings.maxHistoryTurns).toBe(5);
   });
 
+  it('apiPath 缺省回退默认路径；显式空串保留（表示清空，不回退）', async () => {
+    const { loadSettings } = await import('./panel-client');
+    // 存量配置无 llmApiPath 键 → 回退默认
+    const fallback = await loadSettings(makeStorage());
+    expect(fallback.apiPath).toBe('/chat/completions');
+    // 显式存了空串 → 保留空串语义
+    const cleared = await loadSettings(makeStorage({ llmApiPath: '' }));
+    expect(cleared.apiPath).toBe('');
+  });
+
   it('保存后读取往返一致', async () => {
     const storage = makeStorage();
     const { loadSettings, saveSettings } = await import('./panel-client');
@@ -328,6 +338,7 @@ describe('loadSettings / saveSettings', () => {
       {
         apiKey: 'sk-x',
         baseUrl: 'https://example.com/v1',
+        apiPath: '/v1/chat/completions',
         model: 'm',
         debugMode: true,
         consoleOutput: true,
@@ -337,6 +348,7 @@ describe('loadSettings / saveSettings', () => {
       storage
     );
     const settings = await loadSettings(storage);
+    expect(settings.apiPath).toBe('/v1/chat/completions');
     expect(settings.systemPrompt).toBe('自定义提示词');
     expect(settings.maxHistoryTurns).toBe(3);
   });

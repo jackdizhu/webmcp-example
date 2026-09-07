@@ -23,8 +23,8 @@ export const SettingsPanel = defineComponent({
   setup(props, { emit }) {
     const textInput = (
       label: string,
-      key: 'apiKey' | 'baseUrl' | 'model',
-      attrs: { type: string; placeholder: string; autocomplete?: string }
+      key: 'apiKey' | 'baseUrl' | 'apiPath' | 'model',
+      attrs: { type: string; placeholder: string; autocomplete?: string; hint?: string }
     ): VNode =>
       h('label', [
         h('span', label),
@@ -37,6 +37,7 @@ export const SettingsPanel = defineComponent({
             props.settings[key] = (event.target as HTMLInputElement).value;
           },
         }),
+        attrs.hint ? h('p', { class: 'settings-hint' }, attrs.hint) : null,
       ]);
 
     const checkbox = (key: 'debugMode' | 'consoleOutput', text: string): VNode =>
@@ -94,6 +95,11 @@ export const SettingsPanel = defineComponent({
       h('section', { class: 'settings' }, [
         textInput('API Key', 'apiKey', { type: 'password', placeholder: 'sk-...', autocomplete: 'off' }),
         textInput('Base URL', 'baseUrl', { type: 'text', placeholder: 'https://api.deepseek.com' }),
+        textInput('API Path', 'apiPath', {
+          type: 'text',
+          placeholder: '/chat/completions',
+          hint: '请求路径，拼接在 Base URL 之后；清空后不回退默认路径，发起对话会提示：请配置apiPath，如：/chat/completions。',
+        }),
         textInput('模型', 'model', { type: 'text', placeholder: 'deepseek-v4-flash' }),
         textareaInput('系统提示词', 'systemPrompt', {
           placeholder: '留空则使用内置的页面工具验证助手提示词',

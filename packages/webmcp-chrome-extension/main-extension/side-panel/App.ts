@@ -7,7 +7,7 @@
 import { computed, defineComponent, h, onMounted, onUnmounted, reactive, ref, watch } from 'vue';
 import { AgentAbortError, runAgentLoop, trimHistory, type AgentLoopEvent, type AgentLoopOptions, type AgentTool, type ChatMessage } from './agent-loop';
 import { composeHandoffMessage, type DebugRun } from './debugger-core';
-import { createOpenAiCompatClient } from './llm-client';
+import { createOpenAiCompatClient, API_PATH_EMPTY_HINT } from './llm-client';
 import {
   clearLogs,
   exportLogs,
@@ -50,6 +50,7 @@ export const App = defineComponent({
     const settings = reactive<PanelSettings>({
       apiKey: '',
       baseUrl: '',
+      apiPath: '',
       model: '',
       debugMode: false,
       consoleOutput: false,
@@ -158,6 +159,13 @@ export const App = defineComponent({
         return;
       }
 
+      // apiPath 显式清空（空串）不回退默认路径：引导回设置页配置
+      if (settings.apiPath.trim().length === 0) {
+        setTab('settings');
+        pushUiMessage('assistant', API_PATH_EMPTY_HINT);
+        return;
+      }
+
       busy.value = true;
       chatAbort = new AbortController();
       pushUiMessage('user', userText);
@@ -176,6 +184,7 @@ export const App = defineComponent({
         const llm = createOpenAiCompatClient({
           apiKey: settings.apiKey,
           baseUrl: settings.baseUrl,
+          apiPath: settings.apiPath,
           model: settings.model,
         });
         // 历史裁剪：保留最近 maxHistoryTurns 轮（0 = 不裁剪），随 transcript 收敛逐轮有界
@@ -287,6 +296,7 @@ export const App = defineComponent({
     const toPanelSettings = (): PanelSettings => ({
       apiKey: settings.apiKey,
       baseUrl: settings.baseUrl,
+      apiPath: settings.apiPath,
       model: settings.model,
       debugMode: settings.debugMode,
       consoleOutput: settings.consoleOutput,
@@ -359,6 +369,7 @@ export const App = defineComponent({
 
       const loaded = await loadSettings();
       settings.apiKey = loaded.apiKey;
+      settings.apiPath = loaded.apiPath;
       settings.baseUrl = loaded.baseUrl;
       settings.model = loaded.model;
       settings.debugMode = loaded.debugMode;
