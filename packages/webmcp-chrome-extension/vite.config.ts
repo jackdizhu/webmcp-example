@@ -19,7 +19,7 @@ const e2eOutDir = 'e2e-extension/dist';
 const extensionBase: PackUserConfig = {
   format: ['iife'],
   dts: false,
-  sourcemap: true,
+  sourcemap: false,
   treeshake: true,
   minify: false,
   target: 'chrome114',

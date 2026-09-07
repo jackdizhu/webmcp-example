@@ -1,6 +1,6 @@
 {
   "name": "webmcp-extension-relay",
-  "version": "1.1.0",
+  "version": "1.1.1",
   "description": "Local MCP relay for browser WebMCP tools over localhost WebSocket (browser source: WebMCP Chrome extension)",
   "keywords": [
     "ai-agents",
