@@ -59,7 +59,7 @@ export function connectRelayStatus(
   let disposed = false;
   let statuses: RelayTabStatus[] = [];
   let invokeLogs: RelayInvokeLogEntry[] = [];
-  let selection: RelayTabSelection = { mode: 'auto', tabIds: [] };
+  let selection: RelayTabSelection = { tabIds: [] };
   let reconnectDelayMs = RECONNECT_DELAY_INITIAL_MS;
   let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   const listeners = new Set<(statuses: RelayTabStatus[]) => void>();
@@ -125,8 +125,8 @@ export function connectRelayStatus(
       }
       if (typeof msg === 'object' && msg !== null && msg.type === 'selection') {
         const tabIds = msg.tabIds;
-        if ((msg.mode === 'auto' || msg.mode === 'manual') && Array.isArray(tabIds)) {
-          selection = { mode: msg.mode, tabIds: tabIds.filter((id) => typeof id === 'number') };
+        if (Array.isArray(tabIds)) {
+          selection = { tabIds: tabIds.filter((id) => typeof id === 'number') };
           notifySelection();
         }
         return;
@@ -180,7 +180,7 @@ export function connectRelayStatus(
         invokeLogListeners.delete(listener);
       };
     },
-    getSelection: () => ({ mode: selection.mode, tabIds: [...selection.tabIds] }),
+    getSelection: () => ({ tabIds: [...selection.tabIds] }),
     onSelectionChange(listener) {
       selectionListeners.add(listener);
       listener(selection);

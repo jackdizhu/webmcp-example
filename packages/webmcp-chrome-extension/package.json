@@ -38,11 +38,13 @@
     "@mcp-b/global": "catalog:",
     "@mcp-b/transports": "catalog:",
     "@modelcontextprotocol/client": "catalog:",
+    "sanitize-html": "catalog:",
     "vue": "catalog:"
   },
   "devDependencies": {
     "@mcp-b/webmcp-types": "catalog:",
     "@types/node": "catalog:",
+    "@types/sanitize-html": "catalog:",
     "eslint": "catalog:",
     "jsdom": "^25.0.0",
     "playwright": "catalog:",

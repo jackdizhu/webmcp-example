@@ -94,6 +94,27 @@ declare namespace chrome {
     };
   }
 
+  namespace scripting {
+    /** executeScript 单帧注入结果（MV3 Promise 形式）。 */
+    interface InjectionResult<T = unknown> {
+      result?: T;
+      frameId?: number;
+      error?: { message: string };
+    }
+
+    /**
+     * 向目标页签注入脚本（需 "scripting" 权限与对应 host_permissions）。
+     * func 为序列化执行：函数体不得引用外部标识符，参数经 args 传入。
+     */
+    function executeScript<T = unknown>(details: {
+      target: { tabId: number; allFrames?: boolean };
+      func?: (...args: never[]) => T;
+      args?: unknown[];
+      files?: string[];
+      world?: 'MAIN' | 'ISOLATED';
+    }): Promise<Array<InjectionResult<T>>>;
+  }
+
   namespace storage {
     namespace local {
       /** Promise 形式自 Chrome 88 起可用（本扩展 minimum_chrome_version 为 116）。 */

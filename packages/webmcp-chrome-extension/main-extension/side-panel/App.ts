@@ -7,7 +7,7 @@
 import { computed, defineComponent, h, onMounted, onUnmounted, reactive, ref, watch } from 'vue';
 import { AgentAbortError, runAgentLoop, trimHistory, type AgentLoopEvent, type AgentLoopOptions, type AgentTool, type ChatMessage } from './agent-loop';
 import { composeHandoffMessage, type DebugRun } from './debugger-core';
-import { createOpenAiCompatClient, API_PATH_EMPTY_HINT } from './llm-client';
+import { createLlmClient, API_PATH_EMPTY_HINT } from './llm-client';
 import {
   clearLogs,
   exportLogs,
@@ -29,6 +29,7 @@ import {
   type PanelSettings,
 } from './panel-client';
 import { connectRelayStatus } from './relay-status-client';
+import { executeBuiltinTool, isBuiltinTool, mergeBuiltinWithPageTools } from '../../core/builtin-tools';
 import type { RelayInvokeLogEntry, RelayTabSelection, RelayTabStatus } from '../../core/relay-status-protocol';
 import { AppHeader } from './components/AppHeader';
 import { RelayStatusBar } from './components/RelayStatusBar';
@@ -52,6 +53,8 @@ export const App = defineComponent({
       baseUrl: '',
       apiPath: '',
       model: '',
+      apiProtocol: 'openai-compat',
+      maxTokens: 4096,
       debugMode: false,
       consoleOutput: false,
       systemPrompt: '',
@@ -116,7 +119,8 @@ export const App = defineComponent({
     const refreshTools = async (): Promise<void> => {
       if (!pageTools) return;
       try {
-        toolsCount.value = (await pageTools.listTools()).length;
+        // 工具数含内置工具（chrome_extension_*，双端统一注册表）
+        toolsCount.value = mergeBuiltinWithPageTools(await pageTools.listTools()).length;
       } catch {
         toolsCount.value = 0;
       }
@@ -177,15 +181,18 @@ export const App = defineComponent({
       const signal = chatAbort.signal;
 
       try {
-        // 每轮发送前刷新工具清单，保证页面工具变化（listChanged）能被感知
-        const tools: AgentTool[] = await pageTools.listTools();
+        // 每轮发送前刷新工具清单，保证页面工具变化（listChanged）能被感知；
+        // 清单合并内置工具（chrome_extension_*，双端统一注册表）
+        const tools: AgentTool[] = mergeBuiltinWithPageTools(await pageTools.listTools());
         toolsCount.value = tools.length;
 
-        const llm = createOpenAiCompatClient({
+        const llm = createLlmClient({
           apiKey: settings.apiKey,
           baseUrl: settings.baseUrl,
           apiPath: settings.apiPath,
           model: settings.model,
+          apiProtocol: settings.apiProtocol,
+          maxTokens: settings.maxTokens,
         });
         // 历史裁剪：保留最近 maxHistoryTurns 轮（0 = 不裁剪），随 transcript 收敛逐轮有界
         const boundedHistory = trimHistory(history, settings.maxHistoryTurns);
@@ -203,7 +210,13 @@ export const App = defineComponent({
           tools,
           {
             llm,
-            executeTool: (name, args) => pageTools!.callTool(name, args),
+            // 内置工具（chrome_extension_*）在扩展上下文执行；页面工具按名路由
+            executeTool: (name, args) =>
+              isBuiltinTool(name)
+                ? executeBuiltinTool(name, args, {
+                    getSelectedTabIds: () => relaySelection.value.tabIds,
+                  })
+                : pageTools!.callTool(name, args),
           },
           loopOptions
         );
@@ -227,10 +240,10 @@ export const App = defineComponent({
     };
 
     const relayStatuses = ref<RelayTabStatus[]>([]);
-    /** 标签页数据源选择（SW 推送；自动模式单选活动页签 / 手动 checkbox 集合）。 */
-    const relaySelection = ref<RelayTabSelection>({ mode: 'auto', tabIds: [] });
+    /** 全局标签页数据源选择（SW 推送；默认 = 打开侧栏时的活动页签，多选全端生效）。 */
+    const relaySelection = ref<RelayTabSelection>({ tabIds: [] });
 
-    /** relay 页 checkbox 勾选：合并出新选中集发给 SW（未选中的页签数据过滤不传递）。 */
+    /** relay 页 checkbox 勾选：合并出新选中集发给 SW（全端生效：relay + agent + 调试）。 */
     const toggleRelayTab = (tabId: number, checked: boolean): void => {
       if (!relayStatusClient) return;
       const next = new Set(relaySelection.value.tabIds);
@@ -240,10 +253,10 @@ export const App = defineComponent({
       logEvent('info', 'relay', 'relay_selection_toggle', `tab ${String(tabId)} → ${checked ? 'selected' : 'deselected'}`);
     };
 
-    /** relay 页「恢复默认」：回到自动模式（仅当前活动页签，单选）。 */
+    /** relay 页「重置」：回到默认（当前活动页签，单选；覆盖手动多选，Q5 语义）。 */
     const resetRelaySelection = (): void => {
-      relayStatusClient?.sendRequest({ type: 'set-selection', tabIds: null });
-      logEvent('info', 'relay', 'relay_selection_reset', 'auto');
+      relayStatusClient?.sendRequest({ type: 'reset-selection' });
+      logEvent('info', 'relay', 'relay_selection_reset', 'active-tab');
     };
 
     /** relay 状态快照落 UI，并把逐 tab 的状态迁移写入日志管线（可导出排查）。 */
@@ -298,6 +311,8 @@ export const App = defineComponent({
       baseUrl: settings.baseUrl,
       apiPath: settings.apiPath,
       model: settings.model,
+      apiProtocol: settings.apiProtocol,
+      maxTokens: settings.maxTokens,
       debugMode: settings.debugMode,
       consoleOutput: settings.consoleOutput,
       systemPrompt: settings.systemPrompt,
@@ -372,6 +387,8 @@ export const App = defineComponent({
       settings.apiPath = loaded.apiPath;
       settings.baseUrl = loaded.baseUrl;
       settings.model = loaded.model;
+      settings.apiProtocol = loaded.apiProtocol;
+      settings.maxTokens = loaded.maxTokens;
       settings.debugMode = loaded.debugMode;
       settings.consoleOutput = loaded.consoleOutput;
       settings.systemPrompt = loaded.systemPrompt;
@@ -394,7 +411,7 @@ export const App = defineComponent({
         void refreshTools();
       });
 
-      // relay 连接状态 + 调用日志 + 标签页选择订阅：状态栏 / relay 调用页 / 日志管线
+      // relay 连接状态 + 调用日志 + 全局标签页选择订阅：状态栏 / relay 调用页 / 日志管线
       relayStatusClient = connectRelayStatus();
       unsubscribeRelayStatus = relayStatusClient.onUpdate(applyRelayStatuses);
       unsubscribeInvokeLogs = relayStatusClient.onInvokeLogs((entries) => {
@@ -402,7 +419,15 @@ export const App = defineComponent({
       });
       unsubscribeRelaySelection = relayStatusClient.onSelectionChange((selection) => {
         relaySelection.value = selection;
+        // 全局选择驱动侧栏 agent / tools 调试的连接目标（多选全端生效，Q2）；
+        // 选中集合为空 = 无目标，客户端整体离线
+        pageTools?.setTargetTabs(selection.tabIds);
+        void refreshTools();
       });
+
+      // Q5 决策：侧栏打开即重置选择为当前活动页签（覆盖上次手动多选）；
+      // SW 推送新 selection 后上面的订阅回调完成建连
+      relayStatusClient.sendRequest({ type: 'reset-selection' });
 
       await refreshTools();
     });

@@ -21,6 +21,9 @@ catalog:
   typescript: ^5.8.3
   # chrome-extension 构建工具（vite-plus 的 `vp` CLI），与移植代码绑定版本保持一致
   vite-plus: 0.1.24
+  # 内置工具 chrome_extension_get_document_info 的 HTML 清洗（Node 生态、无 DOM 依赖，可打进 IIFE）
+  sanitize-html: ^2.17.0
+  '@types/sanitize-html': ^2.16.0
   eslint: ^9.0.0
   vitest: ^5.0.0
   # vitest 覆盖率插件须与 vitest 主版本一致（上游 4.1.8 对应 vitest 4，本仓库 vitest 5）

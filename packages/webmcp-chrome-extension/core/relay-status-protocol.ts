@@ -9,14 +9,15 @@ import type { RelayConnectionStatus } from './relay-source-client';
 /** 状态展示专用 Port 名（侧边栏 connect 与 SW onConnect 双方约定）。 */
 export const RELAY_STATUS_PORT_NAME = 'webmcp-relay-status';
 
-/** 标签页数据源选择（checkbox 多选；未选中的标签页不连 relay，数据过滤不传递）。 */
+/**
+ * 全局标签页数据源选择（2026-09-12 简化）：
+ * 单一事实源存于 SW 编排层（持久化 chrome.storage.local），agent 对话、tools 调试、
+ * relay 端三处共用同一选中集合（多选全端生效）。
+ * 语义：默认 = 打开侧栏时的第一个活动页签（单选）；不随活动页签切换自动跟随；
+ * 后续增删选中项需手动（relay 页 checkbox）；侧栏重开时经 reset-selection 重置。
+ */
 export interface RelayTabSelection {
-  /**
-   * - auto：默认模式，仅选中当前活动标签页（单选），随标签页切换自动跟随；
-   * - manual：用户经侧栏 checkbox 勾选后的手动集合，不随活动页签切换变化。
-   */
-  mode: 'auto' | 'manual';
-  /** 选中标签页集合（空集 = 手动全不选，无数据传递）。 */
+  /** 选中标签页集合（空集 = 无任何选中，全部端点无数据传递）。 */
   tabIds: number[];
 }
 
@@ -43,7 +44,7 @@ export type RelayStatusMessage =
   /** 单次调用的开始/结束事件（结束事件就地合并进同 callId 条目）。 */
   | { type: 'invoke-log'; phase: RelayInvokeLogPhase; entry: RelayInvokeLogEntry }
   /** 标签页数据源选择快照（连接建立、subscribe 与选择变化时推送）。 */
-  | { type: 'selection'; mode: RelayTabSelection['mode']; tabIds: number[] };
+  | { type: 'selection'; tabIds: number[] };
 
 /** 侧边栏 → SW 的消息。 */
 export type RelayStatusRequest =
@@ -67,12 +68,18 @@ export type RelayStatusRequest =
     }
   | {
       /**
-       * 更新标签页数据源选择（relay 页 checkbox 多选）：
-       * - tabIds 为数组 → 手动模式，仅选中页签建立 relay 连接；
-       * - tabIds 为 null → 恢复默认自动模式（仅当前活动页签，单选）。
+       * 更新全局标签页数据源选择（relay 页 checkbox 多选，全端生效）：
+       * 仅选中的页签建立连接（relay 连接 + 侧栏 agent/tools 调试目标）。
        */
       type: 'set-selection';
-      tabIds: number[] | null;
+      tabIds: number[];
+    }
+  | {
+      /**
+       * 重置选择为「当前活动页签」（单选）：侧栏打开（onMounted）时触发，
+       * 覆盖既有手动多选集合（Q5 决策：侧栏重开 = 回到默认单选）。
+       */
+      type: 'reset-selection';
     };
 
 // ---- relay 调用日志（侧栏「relay 调用」页只读展示）----

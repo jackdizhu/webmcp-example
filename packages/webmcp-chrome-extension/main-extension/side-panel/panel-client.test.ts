@@ -1,7 +1,9 @@
-// panel-client 断线自动重连逻辑单测。
-// 用桩 Port 模拟"接收端不存在 → 立即断开"与"稍后恢复"两种场景（fake timers 驱动退避）。
+// panel-client 单测（2026-09-12 多页签编排改造）：
+// 连接目标 = setTargetTabs 下发的全局选中页签集合；每页签一条 Port；
+// listTools 合并 + 同名工具 tab<id>__ 前缀去歧义；callTool 按路由表投递；
+// 断线重连按页签独立进行（不再监听 onActivated 自动跟随）。
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { connectPageTools } from './panel-client';
+import { connectPageTools, loadSettings, saveSettings } from './panel-client';
 import type { PageToolsRequest, PageToolsResponse } from '../../core/page-tools-bridge';
 
 type MessageListener = (message: unknown) => void;
@@ -27,15 +29,22 @@ class StubPort {
   private readonly messageListeners: MessageListener[] = [];
   private readonly disconnectListeners: DisconnectListener[] = [];
   readonly posted: unknown[] = [];
+  private dropped = false;
 
   constructor(
     private readonly options: {
-      /** 连接后立即触发 onDisconnect（模拟接收端不存在）。 */
+      /** 连接后立即异步触发 onDisconnect（模拟接收端不存在，与 Chrome 行为一致）。 */
       dieImmediately?: boolean;
       /** 对每个请求回 ok 响应（模拟已就绪的桥接）。 */
       responder?: (request: PageToolsRequest) => PageToolsResponse;
     } = {}
-  ) {}
+  ) {
+    if (options.dieImmediately) {
+      // macrotask 延迟断开：保证 client 侧 attachPort（microtask 注册监听）先行，
+      // 与 Chrome「connect 后异步失败」语义一致；fake timers 下由 advanceTimers 驱动
+      setTimeout(() => this.drop(CONNECT_ERROR_MESSAGE), 0);
+    }
+  }
 
   get onMessage() {
     return {
@@ -54,8 +63,8 @@ class StubPort {
   postMessage(message: unknown): void {
     this.posted.push(message);
     if (this.options.dieImmediately) {
-      // Chrome 行为：无接收端时 onDisconnect 异步触发，且 lastError 携带失败原因
-      queueMicrotask(() => this.drop(CONNECT_ERROR_MESSAGE));
+      // Chrome 行为：无接收端时 onDisconnect 异步触发（构造时已排队，此处兜底）
+      this.drop(CONNECT_ERROR_MESSAGE);
       return;
     }
     const request = message as PageToolsRequest;
@@ -78,6 +87,8 @@ class StubPort {
 
   /** 模拟对端断开；lastErrorMessage 非空时模拟 Chrome 在监听器执行期间暴露 lastError。 */
   drop(lastErrorMessage?: string): void {
+    if (this.dropped) return;
+    this.dropped = true;
     setChromeLastError(lastErrorMessage);
     try {
       for (const fn of this.disconnectListeners) fn();
@@ -89,7 +100,7 @@ class StubPort {
 
 const asPort = (stub: StubPort): chrome.runtime.Port => stub as unknown as chrome.runtime.Port;
 
-describe('connectPageTools 断线自动重连', () => {
+describe('connectPageTools 多页签编排', () => {
   beforeEach(() => {
     vi.useFakeTimers();
   });
@@ -98,18 +109,187 @@ describe('connectPageTools 断线自动重连', () => {
     vi.useRealTimers();
   });
 
-  it('首次请求遭遇即断端口后拒绝，退避后自动重连成功', async () => {
-    let created = 0;
-    const client = connectPageTools(() => {
-      created += 1;
-      if (created <= 2) {
-        // 前两次：接收端不存在，端口即断
+  it('目标为空时离线且 listTools 返回空数组', async () => {
+    const client = connectPageTools(() => asPort(new StubPort()));
+    const statuses: boolean[] = [];
+    client.onStatusChange((value) => statuses.push(value));
+    await expect(client.listTools()).resolves.toEqual([]);
+    expect(statuses.every((value) => value === false)).toBe(true);
+    client.disconnect();
+  });
+
+  it('setTargetTabs 建连后聚合在线；listTools 合并多页签清单', async () => {
+    const ports = new Map<number, StubPort>();
+    const client = connectPageTools((tabId) => {
+      const stub = new StubPort({
+        responder: (request) => ({
+          id: request.id,
+          ok: true,
+          result:
+            request.type === 'listTools'
+              ? [
+                  { name: `tool_${tabId}`, description: `d${tabId}`, inputSchema: { type: 'object' } },
+                ]
+              : { tabId },
+        }),
+      });
+      ports.set(tabId, stub);
+      return asPort(stub);
+    });
+
+    const statuses: boolean[] = [];
+    client.onStatusChange((value) => statuses.push(value));
+
+    client.setTargetTabs([1]);
+    // 建连是异步的：首条 listTools 响应到达后聚合在线
+    await vi.advanceTimersByTimeAsync(0);
+    await expect(client.listTools()).resolves.toEqual([
+      { name: 'tool_1', description: 'd1', inputSchema: { type: 'object' } },
+    ]);
+    expect(statuses.at(-1)).toBe(true);
+
+    // 追加第二个页签：清单合并
+    client.setTargetTabs([1, 2]);
+    await expect(client.listTools()).resolves.toEqual([
+      { name: 'tool_1', description: 'd1', inputSchema: { type: 'object' } },
+      { name: 'tool_2', description: 'd2', inputSchema: { type: 'object' } },
+    ]);
+    expect(ports.get(1)?.posted.length).toBeGreaterThan(0);
+    expect(ports.get(2)?.posted.length).toBeGreaterThan(0);
+    client.disconnect();
+  });
+
+  it('同名工具跨页签冲突：全部冲突实例加 tab<id>__ 前缀，callTool 按路由投递原始名', async () => {
+    const calls: Array<{ tabId: number; name: string }> = [];
+    const client = connectPageTools((tabId) =>
+      asPort(
+        new StubPort({
+          responder: (request) => {
+            if (request.type === 'listTools') {
+              return {
+                id: request.id,
+                ok: true,
+                result: [{ name: 'get_status', description: 'dup', inputSchema: { type: 'object' } }],
+              };
+            }
+            calls.push({ tabId, name: request.name ?? '' });
+            return { id: request.id, ok: true, result: { by: tabId } };
+          },
+        })
+      )
+    );
+
+    client.setTargetTabs([1, 2]);
+    await vi.advanceTimersByTimeAsync(0);
+    await expect(client.listTools()).resolves.toEqual([
+      { name: 'tab1__get_status', description: 'dup', inputSchema: { type: 'object' } },
+      { name: 'tab2__get_status', description: 'dup', inputSchema: { type: 'object' } },
+    ]);
+
+    await expect(client.callTool('tab2__get_status', { a: 1 })).resolves.toEqual({ by: 2 });
+    expect(calls).toEqual([{ tabId: 2, name: 'get_status' }]);
+
+    // 未知暴露名（未在路由表）抛错
+    await expect(client.callTool('get_status', {})).rejects.toThrow('未知工具');
+    client.disconnect();
+  });
+
+  it('唯一工具名跨页签不加前缀，callTool 路由到持有页签', async () => {
+    const calls: Array<{ tabId: number; name: string }> = [];
+    const client = connectPageTools((tabId) =>
+      asPort(
+        new StubPort({
+          responder: (request) => {
+            if (request.type === 'listTools') {
+              return {
+                id: request.id,
+                ok: true,
+                result: [{ name: `only_${tabId}`, description: 'd', inputSchema: { type: 'object' } }],
+              };
+            }
+            calls.push({ tabId, name: request.name ?? '' });
+            return { id: request.id, ok: true, result: null };
+          },
+        })
+      )
+    );
+
+    client.setTargetTabs([1, 2]);
+    await vi.advanceTimersByTimeAsync(0);
+    await client.listTools();
+
+    await client.callTool('only_2', {});
+    expect(calls).toEqual([{ tabId: 2, name: 'only_2' }]);
+    client.disconnect();
+  });
+
+  it('setTargetTabs 移除页签：Port 断开、路由失效（未知工具报错）', async () => {
+    const ports = new Map<number, StubPort>();
+    const client = connectPageTools((tabId) => {
+      const stub = new StubPort({
+        responder: (request) => ({
+          id: request.id,
+          ok: true,
+          result:
+            request.type === 'listTools'
+              ? [{ name: `tool_${tabId}`, description: 'd', inputSchema: { type: 'object' } }]
+              : null,
+        }),
+      });
+      ports.set(tabId, stub);
+      return asPort(stub);
+    });
+
+    client.setTargetTabs([1, 2]);
+    await vi.advanceTimersByTimeAsync(0);
+    await client.listTools();
+
+    client.setTargetTabs([2]);
+    expect(ports.get(1)?.posted).toBeDefined();
+    // 移除后路由表中 tab1 的工具消失
+    await expect(client.callTool('tool_1', {})).rejects.toThrow('未知工具');
+    await expect(client.callTool('tool_2', {})).resolves.toBeDefined();
+    client.disconnect();
+  });
+
+  it('部分页签离线不阻断其余页签工具；全部失败才抛错', async () => {
+    const client = connectPageTools((tabId) => {
+      if (tabId === 1) {
+        // 页签 1：接收端不存在，端口即断（离线）
         return asPort(new StubPort({ dieImmediately: true }));
       }
-      // 第三次：桥接就绪
       return asPort(
         new StubPort({
-          responder: (request) => ({ id: request.id, ok: true, result: [] }),
+          responder: (request) => ({
+            id: request.id,
+            ok: true,
+            result: request.type === 'listTools' ? [{ name: 'tool_2', description: 'd', inputSchema: {} }] : null,
+          }),
+        })
+      );
+    });
+
+    client.setTargetTabs([1, 2]);
+    await vi.advanceTimersByTimeAsync(0);
+    // 页签 1 离线，页签 2 正常 → 合并结果仍可用
+    await expect(client.listTools()).resolves.toEqual([
+      { name: 'tool_2', description: 'd', inputSchema: {} },
+    ]);
+    client.disconnect();
+  });
+
+  it('即断端口：退避重连按页签独立恢复在线（1s 首次退避）', async () => {
+    let createdForTab1 = 0;
+    const client = connectPageTools((tabId) => {
+      if (tabId === 1) {
+        createdForTab1 += 1;
+        if (createdForTab1 === 1) {
+          return asPort(new StubPort({ dieImmediately: true }));
+        }
+      }
+      return asPort(
+        new StubPort({
+          responder: (request) => ({ id: request.id, ok: true, result: request.type === 'listTools' ? [] : null }),
         })
       );
     });
@@ -117,78 +297,26 @@ describe('connectPageTools 断线自动重连', () => {
     const statuses: boolean[] = [];
     client.onStatusChange((value) => statuses.push(value));
 
-    // 第一次请求（挂在前两个即断端口上）失败
-    await expect(client.listTools()).rejects.toThrow('与页面工具桥接的连接已断开');
-    // 1s 退避 → 第二个即断端口 → 再退避 2s → 第三个端口探活成功
-    await vi.advanceTimersByTimeAsync(1_000);
-    await vi.advanceTimersByTimeAsync(2_000);
+    client.setTargetTabs([1]);
+    await vi.advanceTimersByTimeAsync(0); // 首个端口即断 → 排 1s 退避
+    await vi.advanceTimersByTimeAsync(1_000); // 重连：第二个端口探活成功
+    expect(createdForTab1).toBe(2);
+    expect(statuses.at(-1)).toBe(true);
 
-    const tools = await client.listTools();
-    expect(tools).toEqual([]);
-    expect(created).toBe(3);
-    // 状态收敛为在线，且在线只出现一次（首条响应到达时置位，Port 建立时不置位）
-    expect(statuses[statuses.length - 1]).toBe(true);
-    expect(statuses.filter((value) => value).length).toBe(1);
-  });
-
-  it('接收端不存在（即断端口）时错误信息携带 chrome.runtime.lastError 原文', async () => {
-    const client = connectPageTools(() => asPort(new StubPort({ dieImmediately: true })));
-
-    // onDisconnect 监听器内已消费 lastError（否则 Chrome 打印 Unchecked 告警），
-    // 并把失败原因并入拒绝信息，便于定位"页面未注入/受限页面"等场景
-    await expect(client.listTools()).rejects.toThrow(
-      `与页面工具桥接的连接已断开（${CONNECT_ERROR_MESSAGE}），将自动重连`
-    );
+    // 恢复在线后 listTools 可用
+    await expect(client.listTools()).resolves.toEqual([]);
     client.disconnect();
   });
 
-  it('接收端不存在期间状态始终离线，不出现乐观在线', async () => {
+  it('disconnect() 后重连循环终止且不再建连', async () => {
     let created = 0;
     const client = connectPageTools(() => {
       created += 1;
       return asPort(new StubPort({ dieImmediately: true }));
     });
 
-    const statuses: boolean[] = [];
-    client.onStatusChange((value) => statuses.push(value));
-
-    // 连续多轮重连全部失败：状态除订阅时的初始 false 外，不应出现 true
-    await expect(client.listTools()).rejects.toThrow();
-    await vi.advanceTimersByTimeAsync(1_000 + 2_000 + 4_000);
-    expect(created).toBeGreaterThanOrEqual(3);
-    expect(statuses.every((value) => value === false)).toBe(true);
-    client.disconnect();
-  });
-
-  it('探活超时（端口在但桥接无响应）也会继续退避重试', async () => {
-    let created = 0;
-    const client = connectPageTools(() => {
-      created += 1;
-      if (created === 1) {
-        return asPort(new StubPort({ dieImmediately: true }));
-      }
-      // 端口存活但对请求从不响应（模拟 content script 已注入但 MCP 未就绪）
-      return asPort(new StubPort());
-    });
-
-    await expect(client.listTools()).rejects.toThrow('与页面工具桥接的连接已断开');
-    // 第 1 次重连：ping 发出但无响应 → 5s ping 超时 → 再排下一次
-    await vi.advanceTimersByTimeAsync(1_000);
-    expect(created).toBe(2);
-    await vi.advanceTimersByTimeAsync(5_000 + 2_000);
-    // 第 2 次重连已发生（退避按 2s 排定）
-    expect(created).toBe(3);
-    client.disconnect();
-  });
-
-  it('disconnect() 后重连循环终止', async () => {
-    let created = 0;
-    const client = connectPageTools(() => {
-      created += 1;
-      return asPort(new StubPort({ dieImmediately: true }));
-    });
-
-    await expect(client.listTools()).rejects.toThrow();
+    client.setTargetTabs([1]);
+    await vi.advanceTimersByTimeAsync(0);
     client.disconnect();
     const countAtDisconnect = created;
 
@@ -201,24 +329,23 @@ describe('connectPageTools 断线自动重连', () => {
       responder: (request) => ({ id: request.id, ok: true, result: [] }),
     });
     const client = connectPageTools(() => asPort(stub));
+    client.setTargetTabs([1]);
 
     let fired = 0;
     client.onToolsChange(() => {
       fired += 1;
     });
 
-    // 先建立在线连接（首条响应置在线）
     await client.listTools();
     expect(fired).toBe(0);
 
-    // 桥接推送通知：订阅者被触发；无 id 的通知不影响后续请求响应
     stub.emit({ type: 'toolsChanged' });
     expect(fired).toBe(1);
     await expect(client.listTools()).resolves.toEqual([]);
     client.disconnect();
   });
 
-  it('默认工厂经 chrome.tabs.connect 连接活动标签页', async () => {
+  it('默认工厂经 chrome.tabs.connect 直连指定页签（不查询活动页签）', async () => {
     const stub = new StubPort({
       responder: (request) => ({ id: request.id, ok: true, result: [] }),
     });
@@ -230,50 +357,12 @@ describe('connectPageTools 断线自动重连', () => {
     };
 
     const client = connectPageTools();
+    client.setTargetTabs([7]);
+    await vi.advanceTimersByTimeAsync(0);
     await expect(client.listTools()).resolves.toEqual([]);
-    expect(querySpy).toHaveBeenCalledWith({ active: true, currentWindow: true });
-    expect(connectSpy).toHaveBeenCalledWith(42, { name: 'webmcp-page-tools' });
-
-    client.disconnect();
-    delete (globalThis as unknown as { chrome?: unknown }).chrome;
-  });
-
-  it('活动标签页切换后断开旧连接并重连到新标签页', async () => {
-    const created: Array<{ tabId: number; stub: StubPort }> = [];
-    let nextTabId = 100;
-    let notifyActivated: ((info: { tabId: number }) => void) | null = null;
-    (globalThis as unknown as { chrome?: unknown }).chrome = {
-      runtime: {},
-      tabs: {
-        query: vi.fn(async () => [{ id: nextTabId }]),
-        connect: vi.fn((tabId: number) => {
-          const stub = new StubPort({
-            responder: (request) => ({ id: request.id, ok: true, result: [tabId] }),
-          });
-          created.push({ tabId, stub });
-          return stub;
-        }),
-        onActivated: {
-          addListener: (cb: (info: { tabId: number }) => void) => {
-            notifyActivated = cb;
-          },
-          removeListener: () => {},
-        },
-      },
-    };
-
-    const client = connectPageTools();
-    // 首次连接到标签页 100
-    await expect(client.listTools()).resolves.toEqual([100]);
-    expect(created[0]?.tabId).toBe(100);
-    expect(notifyActivated).not.toBeNull();
-
-    // 切换到标签页 101：旧端口被断开，重连循环自动连到新活动页
-    nextTabId = 101;
-    notifyActivated!({ tabId: 101 });
-    await vi.advanceTimersByTimeAsync(1_000);
-    await expect(client.listTools()).resolves.toEqual([101]);
-    expect(created[1]?.tabId).toBe(101);
+    // R2/R3 决策：目标页签由调用方给定，不再经 tabs.query 取活动页签
+    expect(querySpy).not.toHaveBeenCalled();
+    expect(connectSpy).toHaveBeenCalledWith(7, { name: 'webmcp-page-tools' });
 
     client.disconnect();
     delete (globalThis as unknown as { chrome?: unknown }).chrome;
@@ -299,12 +388,14 @@ describe('loadSettings / saveSettings', () => {
 
   it('缺省时回退内置默认（含 systemPrompt 与 maxHistoryTurns）', async () => {
     const storage = makeStorage();
-    const settings = await import('./panel-client').then((m) => m.loadSettings(storage));
+    const settings = await loadSettings(storage);
     expect(settings.systemPrompt).toBe(
       '你是浏览器页面 WebMCP 工具验证助手。用户会要求你验证当前页面暴露的工具；' +
         '请优先调用页面工具并基于真实返回结果回答，不要编造工具执行结果。'
     );
     expect(settings.maxHistoryTurns).toBe(5);
+    expect(settings.apiProtocol).toBe('openai-compat');
+    expect(settings.maxTokens).toBe(4096);
   });
 
   it('systemPrompt 缺失/非字符串回退默认；maxHistoryTurns 非整数回退默认', async () => {
@@ -312,7 +403,6 @@ describe('loadSettings / saveSettings', () => {
       llmSystemPrompt: 123,
       agentMaxHistoryTurns: 'not-a-number',
     });
-    const { loadSettings } = await import('./panel-client');
     const settings = await loadSettings(storage);
     expect(settings.systemPrompt).toBe(
       '你是浏览器页面 WebMCP 工具验证助手。用户会要求你验证当前页面暴露的工具；' +
@@ -322,7 +412,6 @@ describe('loadSettings / saveSettings', () => {
   });
 
   it('apiPath 缺省回退默认路径；显式空串保留（表示清空，不回退）', async () => {
-    const { loadSettings } = await import('./panel-client');
     // 存量配置无 llmApiPath 键 → 回退默认
     const fallback = await loadSettings(makeStorage());
     expect(fallback.apiPath).toBe('/chat/completions');
@@ -331,15 +420,23 @@ describe('loadSettings / saveSettings', () => {
     expect(cleared.apiPath).toBe('');
   });
 
-  it('保存后读取往返一致', async () => {
+  it('apiProtocol 仅接受合法枚举，其余回退 openai-compat', async () => {
+    const valid = await loadSettings(makeStorage({ llmApiProtocol: 'anthropic' }));
+    expect(valid.apiProtocol).toBe('anthropic');
+    const invalid = await loadSettings(makeStorage({ llmApiProtocol: 'gemini' }));
+    expect(invalid.apiProtocol).toBe('openai-compat');
+  });
+
+  it('保存后读取往返一致（含新增 apiProtocol / maxTokens）', async () => {
     const storage = makeStorage();
-    const { loadSettings, saveSettings } = await import('./panel-client');
     await saveSettings(
       {
         apiKey: 'sk-x',
         baseUrl: 'https://example.com/v1',
         apiPath: '/v1/chat/completions',
         model: 'm',
+        apiProtocol: 'anthropic',
+        maxTokens: 2048,
         debugMode: true,
         consoleOutput: true,
         systemPrompt: '自定义提示词',
@@ -351,5 +448,7 @@ describe('loadSettings / saveSettings', () => {
     expect(settings.apiPath).toBe('/v1/chat/completions');
     expect(settings.systemPrompt).toBe('自定义提示词');
     expect(settings.maxHistoryTurns).toBe(3);
+    expect(settings.apiProtocol).toBe('anthropic');
+    expect(settings.maxTokens).toBe(2048);
   });
 });

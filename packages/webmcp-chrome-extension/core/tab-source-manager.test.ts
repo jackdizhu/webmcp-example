@@ -73,17 +73,15 @@ class FakePort {
 function createTabsStub(): TabsApi & {
   tabs: Map<number, { id: number; url?: string; title?: string }>;
   ports: FakePort[];
-  /** 当前活动标签页（null = 无活动页签；auto 模式默认选中它）。 */
+  /** 当前活动标签页（null = 无活动页签；init/reset 默认选中它）。 */
   activeTabId: number | null;
   emitUpdated(tabId: number, changeInfo: { status?: string; url?: string }, tab: { id?: number; url?: string; title?: string }): void;
   emitRemoved(tabId: number): void;
-  emitActivated(tabId: number): void;
 } {
   const tabs = new Map<number, { id: number; url?: string; title?: string }>();
   const ports: FakePort[] = [];
   const updatedListeners = new Set<TabsApi['onUpdated'] extends { addListener(cb: infer C): void } ? C : never>();
   const removedListeners = new Set<(tabId: number) => void>();
-  const activatedListeners = new Set<(activeInfo: { tabId: number }) => void>();
   const state: { activeTabId: number | null } = { activeTabId: null };
 
   /** 简化版 URL 模式匹配：仅支持 rescan 用到的两种模式。 */
@@ -112,11 +110,6 @@ function createTabsStub(): TabsApi & {
         listener(tabId);
       }
     },
-    emitActivated: (tabId) => {
-      for (const listener of activatedListeners) {
-        listener({ tabId });
-      }
-    },
     get: async (tabId) => tabs.get(tabId) ?? { id: tabId },
     query: async (queryInfo) => {
       let result = [...tabs.values()];
@@ -135,10 +128,6 @@ function createTabsStub(): TabsApi & {
       return port as unknown as chrome.runtime.Port;
     },
     reload: vi.fn(async () => undefined),
-    onActivated: {
-      addListener: (listener) => activatedListeners.add(listener),
-      removeListener: (listener) => activatedListeners.delete(listener),
-    },
     onUpdated: {
       addListener: (listener) => updatedListeners.add(listener),
       removeListener: (listener) => updatedListeners.delete(listener),
@@ -221,14 +210,14 @@ function createMemoryCache() {
 
 /** 内存标签页选择存储（记录 write 历史，供持久化断言）。 */
 function createMemorySelectionStore() {
-  const values: Array<{ mode: 'auto' | 'manual'; tabIds: number[] }> = [];
-  let current: { mode: 'auto' | 'manual'; tabIds: number[] } | null = null;
+  const values: Array<{ tabIds: number[] }> = [];
+  let current: { tabIds: number[] } | null = null;
   return {
     values,
     read: async () => current,
-    write: async (value: { mode: 'auto' | 'manual'; tabIds: number[] }) => {
-      values.push({ mode: value.mode, tabIds: [...value.tabIds] });
-      current = { mode: value.mode, tabIds: [...value.tabIds] };
+    write: async (value: { tabIds: number[] }) => {
+      values.push({ tabIds: [...value.tabIds] });
+      current = { tabIds: [...value.tabIds] };
     },
   };
 }
@@ -767,9 +756,9 @@ describe('startTabSourceManager', () => {
     manager.stop();
   });
 
-  // ---- 标签页数据源选择（默认活动页签单选 + checkbox 多选门控）----
+  // ---- 全局标签页数据源选择（默认活动页签单选 + checkbox 多选门控，全端生效）----
 
-  it('setSelection 多选：手动模式连接全部选中页签并持久化', async () => {
+  it('setSelection 多选：连接全部选中页签并持久化（全端生效）', async () => {
     const tabsStub = createTabsStub();
     tabsStub.tabs.set(1, { id: 1, url: 'https://a.com/', title: 'A' });
     tabsStub.tabs.set(2, { id: 2, url: 'https://b.com/', title: 'B' });
@@ -787,15 +776,15 @@ describe('startTabSourceManager', () => {
     await manager.setSelection([1, 2]);
     await vi.waitFor(() => expect(stubs).toHaveLength(2));
     expect(stubs.map((stub) => stub.input.tabId).sort()).toEqual([1, 2]);
-    expect(store.values.at(-1)).toEqual({ mode: 'manual', tabIds: [1, 2] });
+    expect(store.values.at(-1)).toEqual({ tabIds: [1, 2] });
     const statusById = new Map(manager.getStatuses().map((status) => [status.tabId, status]));
     expect(statusById.get(1)?.selected).toBe(true);
     expect(statusById.get(2)?.selected).toBe(true);
-    expect(manager.getSelection()).toEqual({ mode: 'manual', tabIds: [1, 2] });
+    expect(manager.getSelection()).toEqual({ tabIds: [1, 2] });
     manager.stop();
   });
 
-  it('setSelection(null) 恢复默认：仅活动页签，其余选中页签连接被释放', async () => {
+  it('resetSelection 重置：仅活动页签，其余选中页签连接被释放（侧栏重开语义，Q5）', async () => {
     const tabsStub = createTabsStub();
     tabsStub.tabs.set(1, { id: 1, url: 'https://a.com/', title: 'A' });
     tabsStub.tabs.set(2, { id: 2, url: 'https://b.com/', title: 'B' });
@@ -811,19 +800,19 @@ describe('startTabSourceManager', () => {
 
     await manager.setSelection([1, 2]);
     await vi.waitFor(() => expect(stubs).toHaveLength(2));
-    await manager.setSelection(null);
+    await manager.resetSelection();
     await vi.waitFor(() => expect(stubs[1]!.stop).toHaveBeenCalled());
     // stubs 是追加式创建记录（释放不缩短），以 stop/disconnect 断言连接释放
     expect(stubs[0]!.input.tabId).toBe(1);
     expect(stubs[0]!.stop).not.toHaveBeenCalled();
     expect(stubs[1]!.input.tabId).toBe(2);
     expect(tabsStub.ports[1]!.disconnected).toBe(true);
-    expect(manager.getSelection()).toEqual({ mode: 'auto', tabIds: [1] });
-    expect(store.values.at(-1)).toEqual({ mode: 'auto', tabIds: [1] });
+    expect(manager.getSelection()).toEqual({ tabIds: [1] });
+    expect(store.values.at(-1)).toEqual({ tabIds: [1] });
     manager.stop();
   });
 
-  it('自动模式下切换活动标签页：旧源释放、新源建立（跟随当前页签）', async () => {
+  it('切换活动标签页不跟随：选中集合保持不变（R2 决策，改连需手动）', async () => {
     const tabsStub = createTabsStub();
     tabsStub.tabs.set(1, { id: 1, url: 'https://a.com/', title: 'A' });
     tabsStub.tabs.set(2, { id: 2, url: 'https://b.com/', title: 'B' });
@@ -836,34 +825,10 @@ describe('startTabSourceManager', () => {
     });
 
     await vi.waitFor(() => expect(stubs).toHaveLength(1));
-    tabsStub.emitActivated(2);
-    await vi.waitFor(() => expect(stubs).toHaveLength(2));
-    expect(stubs[1]!.input.tabId).toBe(2);
-    expect(stubs[0]!.stop).toHaveBeenCalled();
-    expect(manager.getSelection()).toEqual({ mode: 'auto', tabIds: [2] });
-    manager.stop();
-  });
-
-  it('手动模式下切换活动标签页不影响选择', async () => {
-    const tabsStub = createTabsStub();
-    tabsStub.tabs.set(1, { id: 1, url: 'https://a.com/', title: 'A' });
-    tabsStub.tabs.set(2, { id: 2, url: 'https://b.com/', title: 'B' });
-    tabsStub.activeTabId = 1;
-    const { stubs, factory } = createClientStubFactory();
-    const manager = startTabSourceManager({
-      tabsApi: tabsStub,
-      clientFactory: factory,
-      endpointCache: createMemoryCache(),
-    });
-
-    await manager.setSelection([1]);
-    await vi.waitFor(() => expect(stubs).toHaveLength(1));
-    tabsStub.emitActivated(2);
-    await vi.waitFor(() => expect(manager.getSelection()).toEqual({ mode: 'manual', tabIds: [1] }));
-    // 选中集不变：没有新客户端，也没有释放
+    // SW 不再监听 onActivated：切换后无新客户端、无释放、选择不变
+    // （Stub 已不含 onActivated 监听器，此处仅验证状态与集合不变）
     expect(stubs).toHaveLength(1);
-    expect(stubs[0]!.input.tabId).toBe(1);
-    expect(stubs[0]!.stop).not.toHaveBeenCalled();
+    expect(manager.getSelection()).toEqual({ tabIds: [1] });
     manager.stop();
   });
 
@@ -906,11 +871,11 @@ describe('startTabSourceManager', () => {
     await vi.waitFor(() => expect(stubs).toHaveLength(1));
     tabsStub.emitRemoved(1);
     await vi.waitFor(() => {
-      expect(manager.getSelection()).toEqual({ mode: 'auto', tabIds: [] });
+      expect(manager.getSelection()).toEqual({ tabIds: [] });
       expect(manager.getStatuses()).toHaveLength(0);
     });
     expect(stubs[0]!.stop).toHaveBeenCalled();
-    expect(store.values.at(-1)).toEqual({ mode: 'auto', tabIds: [] });
+    expect(store.values.at(-1)).toEqual({ tabIds: [] });
     manager.stop();
   });
 
@@ -921,7 +886,7 @@ describe('startTabSourceManager', () => {
     tabsStub.activeTabId = 1;
     const { stubs, factory } = createClientStubFactory();
     const store = createMemorySelectionStore();
-    await store.write({ mode: 'manual', tabIds: [2] });
+    await store.write({ tabIds: [2] });
     const manager = startTabSourceManager({
       tabsApi: tabsStub,
       clientFactory: factory,
@@ -932,7 +897,7 @@ describe('startTabSourceManager', () => {
     await vi.waitFor(() => expect(stubs).toHaveLength(1));
     // 活动页签是 1，但手动选择只勾了 2 → 只连 2
     expect(stubs[0]!.input.tabId).toBe(2);
-    expect(manager.getSelection()).toEqual({ mode: 'manual', tabIds: [2] });
+    expect(manager.getSelection()).toEqual({ tabIds: [2] });
     manager.stop();
   });
 });
@@ -1070,18 +1035,22 @@ describe('startRelayStatusPort', () => {
     });
   });
 
-  it('标签页选择：连接即推送 selection，set-selection 转发且畸形负载忽略', async () => {
+  it('全局标签页选择：连接即推送 selection，set-selection/reset-selection 转发且畸形负载忽略', async () => {
     const runtimeStub = createRuntimeStub();
-    const calls: Array<number[] | null> = [];
-    const selectionListeners = new Set<(selection: { mode: 'auto' | 'manual'; tabIds: number[] }) => void>();
+    const setCalls: number[][] = [];
+    let resetCalls = 0;
+    const selectionListeners = new Set<(selection: { tabIds: number[] }) => void>();
     const manager = {
       getStatuses: () => [],
       onStatusChange: () => () => undefined,
-      getSelection: () => ({ mode: 'auto' as const, tabIds: [7] }),
-      setSelection: (tabIds: number[] | null) => {
-        calls.push(tabIds);
+      getSelection: () => ({ tabIds: [7] }),
+      setSelection: (tabIds: number[]) => {
+        setCalls.push([...tabIds]);
       },
-      onSelectionChange: (listener: (selection: { mode: 'auto' | 'manual'; tabIds: number[] }) => void) => {
+      resetSelection: () => {
+        resetCalls += 1;
+      },
+      onSelectionChange: (listener: (selection: { tabIds: number[] }) => void) => {
         selectionListeners.add(listener);
         return () => {
           selectionListeners.delete(listener);
@@ -1092,21 +1061,23 @@ describe('startRelayStatusPort', () => {
 
     const port = runtimeStub.emitConnect(RELAY_STATUS_PORT_NAME);
     expect(port.sent[0]).toEqual({ type: 'snapshot', statuses: [] });
-    expect(port.sent[1]).toEqual({ type: 'selection', mode: 'auto', tabIds: [7] });
+    expect(port.sent[1]).toEqual({ type: 'selection', tabIds: [7] });
 
     port.receive({ type: 'set-selection', tabIds: [7, 8] });
     port.receive({ type: 'set-selection', tabIds: null });
     port.receive({ type: 'set-selection', tabIds: 'bogus' });
     port.receive({ type: 'set-selection', tabIds: [1, 'x'] });
+    port.receive({ type: 'reset-selection' });
     await vi.waitFor(() => {
-      expect(calls).toEqual([[7, 8], null]);
+      expect(setCalls).toEqual([[7, 8]]);
+      expect(resetCalls).toBe(1);
     });
 
     // 选择变化推送 selection 消息
     for (const listener of selectionListeners) {
-      listener({ mode: 'manual', tabIds: [7, 8] });
+      listener({ tabIds: [7, 8] });
     }
-    expect(port.sent.at(-1)).toEqual({ type: 'selection', mode: 'manual', tabIds: [7, 8] });
+    expect(port.sent.at(-1)).toEqual({ type: 'selection', tabIds: [7, 8] });
 
     // 断开后取消选择订阅
     port.disconnect();

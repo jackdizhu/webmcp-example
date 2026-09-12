@@ -29,7 +29,7 @@ export const RelayPage = defineComponent({
     active: { type: Boolean, required: true },
     /** 全部 http(s) 标签页状态（含未选中页签的 stopped 占位，供 checkbox 列表）。 */
     statuses: { type: Array as PropType<RelayTabStatus[]>, required: true },
-    /** 当前数据源选择（自动模式单选活动页签 / 手动 checkbox 集合）。 */
+    /** 当前全局数据源选择（SW 推送；默认 = 打开侧栏时的活动页签）。 */
     selection: { type: Object as PropType<RelayTabSelection>, required: true },
     /** 调用日志（App 层维护的环形缓冲，时间正序；渲染时倒序展示最新在前）。 */
     invokeLogs: { type: Array as PropType<RelayInvokeLogEntry[]>, required: true },
@@ -39,10 +39,10 @@ export const RelayPage = defineComponent({
     terminated: { type: Boolean, required: true },
   },
   emits: {
-    /** 勾选/取消某个标签页 → App 组合新选中集发给 SW。 */
+    /** 勾选/取消某个标签页 → App 组合新选中集发给 SW（全端生效）。 */
     toggleTab: (tabId: number, checked: boolean) =>
       typeof tabId === 'number' && typeof checked === 'boolean',
-    /** 恢复默认（跟随当前活动页签，单选）。 */
+    /** 重置为当前活动页签（单选，覆盖手动多选）。 */
     resetSelection: () => true,
   },
   setup(props, { emit }) {
@@ -70,9 +70,7 @@ export const RelayPage = defineComponent({
         h(
           'p',
           { class: 'relay-source-mode' },
-          props.selection.mode === 'auto'
-            ? '默认模式：仅当前活动标签页（单选）；勾选其他标签页可多选'
-            : `手动模式：已选 ${String(props.selection.tabIds.length)} 个标签页，不随切换页签变化`
+          `全局选择：已选 ${String(props.selection.tabIds.length)} 个标签页（agent / tools 调试 / relay 三端共用；不随切换页签变化）`
         ),
         sorted.length === 0
           ? h('p', { class: 'relay-page-empty-status' }, '暂无可选标签页')
@@ -103,17 +101,15 @@ export const RelayPage = defineComponent({
                 ])
               )
             ),
-        props.selection.mode === 'manual'
-          ? h(
-              'button',
-              {
-                class: 'ghost relay-source-reset',
-                type: 'button',
-                onClick: () => emit('resetSelection'),
-              },
-              '恢复默认（跟随活动标签页）'
-            )
-          : null,
+        h(
+          'button',
+          {
+            class: 'ghost relay-source-reset',
+            type: 'button',
+            onClick: () => emit('resetSelection'),
+          },
+          '重置为当前活动页签（单选）'
+        ),
       ]);
     };
 
