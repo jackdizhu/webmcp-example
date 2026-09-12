@@ -156,4 +156,42 @@ describe('createFormFillTools', () => {
     expect(out.total).toBe(1);
     expect(renderCalls.length).toBe(1);
   });
+
+  it('query_table_data 透传 filter 到 queryData 并回传 hint', async () => {
+    const received: unknown[] = [];
+    const table: TableControllerLike = { render: () => {} };
+    const arr = createFormFillTools({
+      controller: makeController().controller,
+      table,
+      queryData: async (filter) => {
+        received.push(filter);
+        const hit = filter.salesperson === 'S-01';
+        return {
+          columns: [{ key: 'a', label: 'A' }],
+          rows: hit ? [{ a: 1 }] : [],
+          total: hit ? 1 : 0,
+          ...(hit ? {} : { hint: '未找到该销售员的订单' }),
+        };
+      },
+    });
+    const t = Object.fromEntries(arr.map((x) => [x.name, x])) as Record<string, FormTool>;
+
+    const hit = parseAs<{ success: boolean; total: number; rows: unknown[]; hint?: string }>(
+      await t['query_table_data'].execute({ filter: { salesperson: 'S-01' } }),
+    );
+    expect(hit.success).toBe(true);
+    expect(hit.total).toBe(1);
+    expect(hit.hint).toBeUndefined();
+    expect(received[0]).toEqual({ salesperson: 'S-01' });
+
+    const miss = parseAs<{ success: boolean; total: number; hint?: string }>(
+      await t['query_table_data'].execute({ filter: { salesperson: 'S-99' } }),
+    );
+    expect(miss.total).toBe(0);
+    expect(miss.hint).toBe('未找到该销售员的订单');
+
+    // 不传 filter → 空对象透传
+    await t['query_table_data'].execute({});
+    expect(received[2]).toEqual({});
+  });
 });

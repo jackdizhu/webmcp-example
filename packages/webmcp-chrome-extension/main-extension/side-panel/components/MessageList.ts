@@ -1,7 +1,43 @@
-// 消息列表：用户/助手气泡、工具执行痕迹、空态与处理中提示。
+// 消息列表：用户/助手气泡、工具/技能执行痕迹（默认收起、点击展开）、空态与处理中提示。
 // 滚动逻辑内聚：深度监听消息数组（含工具痕迹回填）与 busy，自动滚到底部。
 import { defineComponent, h, nextTick, ref, watch, type PropType } from 'vue';
-import type { UiMessage } from './types';
+import { TOOL_PENDING_TEXT, type ToolTraceItem, type UiMessage } from './types';
+
+/** 单条痕迹的折叠行：头部（徽标 + 名称 + 展开态）默认收起，点击头部切换；执行中不可展开。 */
+const TraceItem = defineComponent({
+  name: 'TraceItem',
+  props: {
+    trace: { type: Object as PropType<ToolTraceItem>, required: true },
+  },
+  setup(props) {
+    const expanded = ref(false);
+    const toggle = (): void => {
+      if (props.trace.result === TOOL_PENDING_TEXT) return;
+      expanded.value = !expanded.value;
+    };
+    return () => {
+      const pending = props.trace.result === TOOL_PENDING_TEXT;
+      const isSkill = props.trace.kind === 'skill';
+      return h(
+        'div',
+        { class: ['tool', props.trace.failed ? 'tool-failed' : '', isSkill ? 'tool-skill' : ''] },
+        [
+          h(
+            'div',
+            { class: 'tool-head', style: { cursor: pending ? 'default' : 'pointer' }, onClick: toggle },
+            [
+              h('span', { class: ['tool-badge', isSkill ? 'tool-badge-skill' : ''] }, isSkill ? 'SKILL' : 'TOOL'),
+              // SKILL 行展示技能 id（label 由 App 经 callTool 缝捕获回填），普通工具行展示工具名
+              h('span', { class: 'tool-name' }, props.trace.label ?? props.trace.name),
+              h('span', { class: 'tool-toggle' }, pending ? '执行中…' : expanded.value ? '收起 ▲' : '展开 ▼'),
+            ]
+          ),
+          expanded.value ? h('pre', { class: 'tool-result' }, props.trace.result) : null,
+        ]
+      );
+    };
+  },
+});
 
 export const MessageList = defineComponent({
   name: 'MessageList',
@@ -42,10 +78,7 @@ export const MessageList = defineComponent({
               h('div', { class: 'bubble' }, [
                 message.content ? h('p', { class: 'content' }, message.content) : null,
                 ...message.toolTrace.map((trace, traceIndex) =>
-                  h('div', { class: ['tool', trace.failed ? 'tool-failed' : ''], key: traceIndex }, [
-                    h('span', { class: 'tool-name' }, trace.name),
-                    h('pre', { class: 'tool-result' }, trace.result),
-                  ])
+                  h(TraceItem, { trace, key: traceIndex })
                 ),
               ]),
             ])

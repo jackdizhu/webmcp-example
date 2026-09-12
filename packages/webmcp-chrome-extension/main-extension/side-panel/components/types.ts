@@ -5,6 +5,13 @@ export interface ToolTraceItem {
   name: string;
   result: string;
   failed: boolean;
+  /** 展示类别：'skill' = 技能加载（__agent_load_skill 工具），缺省 = 普通工具调用。 */
+  kind?: 'tool' | 'skill';
+  /**
+   * 展示名（缺省用 name）。SKILL 行展示**技能 id**（如 page-tools-guide）而非工具名 ——
+   * 工具名是加载器（__agent_load_skill），技能 id 才是 SKILL 的唯一标识。
+   */
+  label?: string;
 }
 
 /** 聊天列表里的一条消息（用户或助手；工具执行作为助手消息的附带痕迹展示）。 */

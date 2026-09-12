@@ -2,25 +2,23 @@
 //   - warehouse（弱时效 60s）：TTL 缓存命中
 //   - staff（中时效 30s）：SWR 后台刷新
 //   - available_stock（强时效 5s + freshRequired）：提交前 forceFresh 复核，模拟被抢占 → STOCK_CHANGED
+// mock 数据按销售员隔离：每个销售员有独立的客户/产品/订单集，
+// query_table_data 可传 filter.salesperson（value 或姓名）查询对应销售员的订单。
 // 内存 mock store，接真实 ERP 时替换 onSubmit 与 loader 即可。
 
 import { registerDataSource, getGlobalResolver, FormController, TableController, createFormFillTools } from '../form-fill-lib';
-import type { FormSchema, FormTool, SubmitOutcome, TableColumn } from '../form-fill-lib';
+import type { FormSchema, FormTool, QueryDataResult, SubmitOutcome, TableColumn } from '../form-fill-lib';
 
 interface OrderRow {
   orderId: string;
+  /** 销售员工号（staff.value，如 S-01） */
+  salesperson: string;
   customer: string;
   product: string;
   quantity: number;
   warehouse: string;
   status: string;
 }
-
-// ---- 内存 mock 数据 ----
-const orderStore: OrderRow[] = [
-  { orderId: 'ORD-1001', customer: '甲客户', product: '机械键盘', quantity: 10, warehouse: 'WH-01', status: '已发货' },
-  { orderId: 'ORD-1002', customer: '乙客户', product: '无线鼠标', quantity: 5, warehouse: 'WH-02', status: '处理中' },
-];
 
 const warehouses: Array<{ value: string; label: string }> = [
   { value: 'WH-01', label: '上海仓' },
@@ -32,6 +30,27 @@ const staff: Array<{ value: string; label: string }> = [
   { value: 'S-02', label: '李四' },
   { value: 'S-03', label: '王五' },
 ];
+
+function staffLabel(value: string): string {
+  return staff.find((s) => s.value === value)?.label ?? value;
+}
+
+// ---- 内存 mock 数据：按销售员隔离（每人独立客户/产品/订单集） ----
+const mockOrdersBySalesperson: Record<string, OrderRow[]> = {
+  'S-01': [
+    { orderId: 'ORD-1001', salesperson: 'S-01', customer: '甲客户', product: '机械键盘', quantity: 10, warehouse: 'WH-01', status: '已发货' },
+    { orderId: 'ORD-1003', salesperson: 'S-01', customer: '丙客户', product: '显示器支架', quantity: 8, warehouse: 'WH-03', status: '处理中' },
+  ],
+  'S-02': [
+    { orderId: 'ORD-1002', salesperson: 'S-02', customer: '乙客户', product: '无线鼠标', quantity: 5, warehouse: 'WH-02', status: '处理中' },
+    { orderId: 'ORD-1004', salesperson: 'S-02', customer: '丁客户', product: '人体工学椅', quantity: 3, warehouse: 'WH-01', status: '已发货' },
+  ],
+  'S-03': [
+    { orderId: 'ORD-1005', salesperson: 'S-03', customer: '戊客户', product: 'USB-C 扩展坞', quantity: 12, warehouse: 'WH-02', status: '已发货' },
+    { orderId: 'ORD-1006', salesperson: 'S-03', customer: '己客户', product: '4K 摄像头', quantity: 6, warehouse: 'WH-03', status: '待审核' },
+  ],
+};
+const orderStore: OrderRow[] = Object.values(mockOrdersBySalesperson).flat();
 
 // 强时效：可用库存，会被并发抢占演示
 let availableStock = 20;
@@ -100,6 +119,7 @@ async function onSubmit(values: Record<string, unknown>): Promise<SubmitOutcome>
   const orderId = 'ORD-' + Date.now().toString().slice(-6);
   orderStore.unshift({
     orderId,
+    salesperson: String(values.salesperson ?? ''),
     customer: String(values.customer),
     product: String(values.product),
     quantity: qty,
@@ -109,16 +129,39 @@ async function onSubmit(values: Record<string, unknown>): Promise<SubmitOutcome>
   return { success: true, data: { orderId, ...values } };
 }
 
-async function queryData(): Promise<{ columns: TableColumn[]; rows: Array<Record<string, unknown>>; total: number }> {
+/**
+ * 解析 filter.salesperson → staff.value。支持传工号（S-01）或姓名（张三）。
+ * 未知销售员原样返回（查询结果为空 + hint 引导 AI 纠正）。
+ */
+function resolveSalespersonFilter(filter: Record<string, unknown>): string | undefined {
+  const raw = filter.salesperson;
+  if (typeof raw !== 'string' || raw.trim() === '') return undefined;
+  const v = raw.trim();
+  if (staff.some((s) => s.value === v)) return v;
+  return staff.find((s) => s.label === v)?.value ?? v;
+}
+
+/** 查询订单：filter.salesperson 指定时返回该销售员的订单，否则返回全部。 */
+export async function queryData(filter: Record<string, unknown> = {}): Promise<QueryDataResult> {
+  const salesperson = resolveSalespersonFilter(filter);
+  const matched = salesperson !== undefined ? orderStore.filter((o) => o.salesperson === salesperson) : orderStore;
   const columns: TableColumn[] = [
     { key: 'orderId', label: '订单号' },
     { key: 'customer', label: '客户' },
     { key: 'product', label: '产品' },
     { key: 'quantity', label: '数量' },
     { key: 'warehouse', label: '发货仓' },
+    { key: 'salesperson', label: '销售员' },
     { key: 'status', label: '状态' },
   ];
-  return { columns, rows: orderStore.map((o) => ({ ...o })), total: orderStore.length };
+  const rows = matched.map((o) => ({ ...o, salesperson: staffLabel(o.salesperson) }));
+  const hint =
+    salesperson === undefined
+      ? undefined
+      : rows.length > 0
+        ? undefined
+        : `未找到销售员「${String(filter.salesperson)}」的订单，可用销售员: ${staff.map((s) => s.label).join('/')}`;
+  return { columns, rows, total: rows.length, ...(hint !== undefined ? { hint } : {}) };
 }
 
 /**

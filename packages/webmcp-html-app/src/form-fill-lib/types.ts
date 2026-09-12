@@ -113,10 +113,23 @@ export interface TableControllerLike {
   render(columns: TableColumn[], rows: Array<Record<string, unknown>>, fetchedAt: number): void;
 }
 
+/** queryData 返回结构（demo 数据提供方实现）。 */
+export interface QueryDataResult {
+  columns: TableColumn[];
+  rows: Array<Record<string, unknown>>;
+  total: number;
+  /** 空结果或需向 AI 补充说明时返回的提示（透传到 query_table_data 工具结果）。 */
+  hint?: string;
+}
+
 /** 构造 MCP 工具所需的依赖。 */
 export interface FormToolDeps {
   controller: FormControllerLike;
   table?: TableControllerLike;
-  /** 查询结果数据提供者（demo 提供）。无 table 时该工具不可用。 */
-  queryData?: () => Promise<{ columns: TableColumn[]; rows: Array<Record<string, unknown>>; total: number }>;
+  /**
+   * 查询结果数据提供者（demo 提供）。无 table 时该工具不可用。
+   * filter 为 query_table_data 工具传入的过滤条件（键值对，语义由提供方定义，
+   * 如 { salesperson: '张三' }）；未传 filter 时为空对象，提供方决定默认行为（如返回全量）。
+   */
+  queryData?: (filter: Record<string, unknown>) => Promise<QueryDataResult>;
 }

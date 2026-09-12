@@ -154,7 +154,7 @@ export class FormController {
     submit.type = 'submit';
     // .ff-submit 样式中 grid-column: 1 / -1，独占栅格一整行
     submit.className = 'ff-submit';
-    submit.textContent = '提交订单';
+    submit.textContent = '查询订单';
     form.appendChild(submit);
 
     root.appendChild(form);

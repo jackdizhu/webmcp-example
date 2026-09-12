@@ -5,7 +5,23 @@
 // 生命周期（Port 桥接连断）。渲染全部下沉到 components/ 与 pages/（h() 渲染函数，
 // MV3 扩展页 CSP 禁止运行时字符串编译，见 issues/001）。
 import { computed, defineComponent, h, onMounted, onUnmounted, reactive, ref } from 'vue';
-import { API_PATH_EMPTY_HINT, createChatController, type AgentLoopEvent } from 'webmcp-agent-chat-core';
+import {
+  API_PATH_EMPTY_HINT,
+  buildSkillL1Section,
+  composeSystemPrompt,
+  createChatController,
+  createSkillResolver,
+  createSkillToolDefinition,
+  mergeLlmConfig,
+  parseSkillToolArgs,
+  SKILL_TOOL_NAME,
+  toSkillToolError,
+  toSkillToolResult,
+  type AgentLoopEvent,
+  type SkillSummary,
+} from 'webmcp-agent-chat-core';
+import { createAgentProfileStore } from './agent-profile-store';
+import { createHostSkillSource, getBuiltinSkillSummary } from './skill-assets';
 import { composeHandoffMessage, type DebugRun } from './debugger-core';
 import {
   initLogger,
@@ -72,6 +88,34 @@ export const App = defineComponent({
     // ---- relay 状态 store（B2 归拢：订阅/diff 日志/调用计数/终止语义收口）----
     const relayStore = createRelayStatusStore();
 
+    // ---- 智能体档案 store（P1，D5/C8：领域逻辑在 core，宿主仅做 chrome.storage 适配）----
+    const profileStore = createAgentProfileStore();
+    /** 待确认切换的智能体 ID（空串 = 无待确认；确认条在 ChatPage 渲染）。 */
+    const pendingSwitchAgentId = ref('');
+
+    // ---- 技能渐进加载（P2，D5/C8：解析编排与结果包装在 core，宿主只提供读取实现与缝注入）----
+    const skillResolver = createSkillResolver(createHostSkillSource());
+    const skillToolDefinition = createSkillToolDefinition();
+    /**
+     * 最近一次 SKILL 调用的技能 id（SKILL 行展示用：技能 id 才是 SKILL 唯一标识，工具名只是加载器）。
+     * 循环内工具串行执行，callTool 捕获 → applyEvent(result/error) 回填，时序安全。
+     */
+    let lastSkillLabel: string | null = null;
+    /** 激活智能体已启用技能的摘要（L1 清单数据源 = 内置 assets；storage 覆写只影响 L2 全文内容）。 */
+    const enabledSkillSummaries = (): SkillSummary[] =>
+      (profileStore.activeAgent.value?.skills ?? [])
+        .filter((skill) => skill.enabled)
+        .map((skill) => getBuiltinSkillSummary(skill.id))
+        .filter((item): item is SkillSummary => item !== null);
+    /** 最终组装的系统提示词（getSystemPrompt 缝与「查看提示词」共用同一实现）。 */
+    const composedSystemPrompt = (): string => {
+      const summaries = enabledSkillSummaries();
+      const skillSection = summaries.length > 0 ? buildSkillL1Section(summaries) : undefined;
+      return composeSystemPrompt(profileStore.activeAgent.value, settings.systemPrompt, {
+        ...(skillSection !== undefined ? { skillSection } : {}),
+      });
+    };
+
     /** 执行锁：agent 对话或 relay 调用进行中为 true。 */
     const locked = computed(() => busy.value || relayStore.runningCount.value > 0);
     /** 锁定期间 TabBar 展示的执行提示。 */
@@ -88,7 +132,10 @@ export const App = defineComponent({
     };
 
     const pushUiMessage = (role: UiMessage['role'], content: string): UiMessage => {
-      const item: UiMessage = { role, content, toolTrace: [] };
+      // 必须以响应式代理入列并返回：createTurnView 持有该对象做原位变更（onEvent 回填工具痕迹、
+      // setText 写最终文案）。若返回原始对象，变更会绕过响应式 —— UI 只能等 busy 翻转才整体重绘，
+      // 表现为「工具响应不立即展示，整轮结束后一次性出现」。
+      const item = reactive<UiMessage>({ role, content, toolTrace: [] });
       messages.value.push(item);
       return item;
     };
@@ -103,27 +150,55 @@ export const App = defineComponent({
       }
     };
 
-    /** 把过程事件回填到助手消息的工具痕迹里。 */
+    /**
+     * 把过程事件回填到助手消息的工具痕迹里（skill 类别单独标注，UI 徽标区分；
+     * SKILL 行展示名回填为技能 id —— tool_start 事件无 args，id 由 callTool 缝在执行时捕获）。
+     */
     const applyEvent = (target: UiMessage, event: AgentLoopEvent): void => {
       if (event.type === 'tool_start') {
-        target.toolTrace.push({ name: event.name, result: TOOL_PENDING_TEXT, failed: false });
+        const isSkill = event.name === SKILL_TOOL_NAME;
+        target.toolTrace.push({
+          name: event.name,
+          result: TOOL_PENDING_TEXT,
+          failed: false,
+          ...(isSkill ? { kind: 'skill' as const } : {}),
+        });
         logEvent('info', 'tools', 'tool_start', { name: event.name });
         return;
       }
       if (event.type === 'tool_result' || event.type === 'tool_error') {
+        const isSkill = event.name === SKILL_TOOL_NAME;
+        const capturedLabel = isSkill && lastSkillLabel !== null ? lastSkillLabel : null;
         const pending = [...target.toolTrace].reverse().find(
           (item) => item.name === event.name && item.result === TOOL_PENDING_TEXT
         );
         if (event.type === 'tool_result') {
-          if (pending) pending.result = event.result;
-          else target.toolTrace.push({ name: event.name, result: event.result, failed: false });
+          if (pending) {
+            pending.result = event.result;
+            if (capturedLabel !== null) pending.label = capturedLabel;
+          } else {
+            target.toolTrace.push({
+              name: event.name,
+              result: event.result,
+              failed: false,
+              ...(isSkill ? { kind: 'skill' as const } : {}),
+              ...(capturedLabel !== null ? { label: capturedLabel } : {}),
+            });
+          }
           logEvent('info', 'tools', 'tool_result', { name: event.name, result: event.result });
         } else {
           if (pending) {
             pending.result = event.error;
             pending.failed = true;
+            if (capturedLabel !== null) pending.label = capturedLabel;
           } else {
-            target.toolTrace.push({ name: event.name, result: event.error, failed: true });
+            target.toolTrace.push({
+              name: event.name,
+              result: event.error,
+              failed: true,
+              ...(isSkill ? { kind: 'skill' as const } : {}),
+              ...(capturedLabel !== null ? { label: capturedLabel } : {}),
+            });
           }
           logEvent('error', 'tools', 'tool_error', { name: event.name, error: event.error });
         }
@@ -138,19 +213,41 @@ export const App = defineComponent({
         // 每轮发送前刷新工具清单，保证页面工具变化（listChanged）能被感知；
         // 清单含内置工具（chrome_extension_*，由 attachBuiltinTools 合成）
         const tools = await pageTools!.listTools();
-        toolsCount.value = tools.length;
-        return tools;
+        // P2：激活智能体启用了技能时追加 __agent_load_skill（D6 注入点；调试页/relay 的 pageTools 不受影响）
+        const appendSkillTool =
+          enabledSkillSummaries().length > 0 && !tools.some((tool) => tool.name === SKILL_TOOL_NAME);
+        toolsCount.value = tools.length + (appendSkillTool ? 1 : 0);
+        return appendSkillTool ? [...tools, skillToolDefinition] : tools;
       },
-      callTool: (name, args) => pageTools!.callTool(name, args),
-      getLlmConfig: () => ({
-        apiKey: settings.apiKey,
-        baseUrl: settings.baseUrl,
-        apiPath: settings.apiPath,
-        model: settings.model,
-        apiProtocol: settings.apiProtocol,
-        maxTokens: settings.maxTokens,
-      }),
-      getSystemPrompt: () => settings.systemPrompt,
+      callTool: async (name, args) => {
+        // P2：__agent_load_skill 经宿主缝本地路由（core 解析编排 + 结果包装），其余透传页面工具
+        if (name === SKILL_TOOL_NAME) {
+          try {
+            const skillId = parseSkillToolArgs(args);
+            lastSkillLabel = skillId;
+            return toSkillToolResult(await skillResolver.resolve(skillId));
+          } catch (error) {
+            lastSkillLabel = null;
+            return toSkillToolError(error instanceof Error ? error.message : String(error));
+          }
+        }
+        return pageTools!.callTool(name, args);
+      },
+      // per-agent LLM 覆写（P1）：全局 settings 为 base，激活智能体的 llmOverride 合并其上（领域逻辑在 core）
+      getLlmConfig: () =>
+        mergeLlmConfig(
+          {
+            apiKey: settings.apiKey,
+            baseUrl: settings.baseUrl,
+            apiPath: settings.apiPath,
+            model: settings.model,
+            apiProtocol: settings.apiProtocol,
+            maxTokens: settings.maxTokens,
+          },
+          profileStore.activeAgent.value?.llmOverride
+        ),
+      // rules 分层组装（P1）+ [skills] L1 清单（P2），领域逻辑在 core；与「查看提示词」共用实现
+      getSystemPrompt: () => composedSystemPrompt(),
       getMaxHistoryTurns: () => settings.maxHistoryTurns,
       onUserMessage: (text) => pushUiMessage('user', text),
       createTurnView: () => {
@@ -209,6 +306,43 @@ export const App = defineComponent({
       }
     };
 
+    // ---- 智能体切换（D4：确认后清空历史开新会话；locked 期间禁止发起）----
+    /** 确认条展示名（由待确认 ID 反查）。 */
+    const pendingSwitchName = computed(
+      () => profileStore.agents.value.find((item) => item.id === pendingSwitchAgentId.value)?.name ?? ''
+    );
+    const requestSwitchAgent = (id: string): void => {
+      if (locked.value || id.length === 0 || id === profileStore.activeAgentId.value) return;
+      pendingSwitchAgentId.value = id;
+    };
+    const confirmSwitchAgent = async (): Promise<void> => {
+      const id = pendingSwitchAgentId.value;
+      if (id.length === 0 || locked.value) return;
+      // 开新会话：清跨轮历史（controller）+ 清 UI 消息（D4 领域规则在 core，UI 清空属宿主展示层）
+      chatController.clearHistory();
+      messages.value = [];
+      pendingSwitchAgentId.value = '';
+      await profileStore.setActive(id);
+      pushUiMessage('assistant', `已切换到「${profileStore.activeAgent.value?.name ?? id}」，已开启新会话。`);
+      logEvent('info', 'chat', 'agent_switched', { agentId: id });
+    };
+    const cancelSwitchAgent = (): void => {
+      pendingSwitchAgentId.value = '';
+    };
+
+    /** ChatPage「查看提示词」：把最终组装的系统提示词以消息形式展示（P2 轻量实现，含段来源标注）。 */
+    const inspectPrompt = (): void => {
+      if (locked.value) return;
+      const prompt = composedSystemPrompt();
+      pushUiMessage(
+        'assistant',
+        prompt.length > 0
+          ? `当前系统提示词（分层组装，含段来源标注）：\n\n${prompt}`
+          : '当前系统提示词为空，将使用内置默认提示词。'
+      );
+      logEvent('info', 'chat', 'system_prompt_inspected');
+    };
+
     /** 把响应式 settings 收敛为待持久化快照（序列化收口在 panel-client，A5 归位）。 */
     const persistSettings = async (): Promise<void> => {
       await saveSettings(toPanelSettings(settings));
@@ -245,6 +379,10 @@ export const App = defineComponent({
       setConsoleOutput(loaded.consoleOutput);
       // 调试模式：侧栏打开时默认进入 tools 调试页
       if (settings.debugMode) activeTab.value = 'debug';
+
+      // 智能体档案：读存储 →（缺失/脏数据时按旧版 systemPrompt 幂等迁移）→ 需要时落盘
+      // （D5/C8：迁移与校验逻辑在 core，这里只是调用 + 持久化适配）
+      await profileStore.load(settings.systemPrompt);
 
       // 页面工具客户端 + 内置工具合成：agent 对话与 tools 调试页共用同一实例，
       // 内置工具的「当前选中页签」直接取 relayStore 的全局选择快照
@@ -318,10 +456,17 @@ export const App = defineComponent({
           locked: locked.value,
           active: activeTab.value === 'chat',
           modelValue: input.value,
+          agents: profileStore.agents.value.map((item) => ({ id: item.id, name: item.name })),
+          activeAgentId: profileStore.activeAgentId.value,
+          pendingSwitchName: pendingSwitchName.value,
           'onUpdate:modelValue': (value: string) => {
             input.value = value;
           },
           onSend: () => void send(),
+          onSwitchAgent: (id: string) => requestSwitchAgent(id),
+          onConfirmSwitch: () => void confirmSwitchAgent(),
+          onCancelSwitch: () => cancelSwitchAgent(),
+          onInspectPrompt: () => inspectPrompt(),
         }),
         pageToolsRef.value
           ? h(DebugPage, {

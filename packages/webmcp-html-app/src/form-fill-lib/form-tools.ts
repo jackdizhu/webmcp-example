@@ -128,16 +128,33 @@ export function createFormFillTools(deps: FormToolDeps): FormTool[] {
 
   const tableTool: FormTool = {
     name: 'query_table_data',
-    description: '查询订单数据，渲染到页面结果表格并返回结构化行数据（含数据获取时间）',
-    inputSchema: { type: 'object', properties: {} },
-    execute: async () => {
+    description:
+      '查询业务数据（如订单），渲染到页面结果表格并返回结构化行数据（含数据获取时间）。' +
+      '可通过 filter 按业务维度过滤（如按销售员 {"salesperson":"张三"}），具体可过滤维度见数据提供方说明。',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        filter: {
+          type: 'object',
+          description: '可选过滤条件（键值对），如 {"salesperson":"张三"}；不传则返回默认结果集',
+        },
+      },
+    },
+    execute: async (input) => {
       if (!queryData || !table) {
         return textResult({ success: false, reason: '查询结果表格未配置' });
       }
-      const res = await queryData();
+      const filter = (input.filter ?? {}) as Record<string, unknown>;
+      const res = await queryData(filter);
       const fetchedAt = Date.now();
       table.render(res.columns, res.rows, fetchedAt);
-      return textResult({ success: true, total: res.total, fetchedAt, rows: res.rows });
+      return textResult({
+        success: true,
+        total: res.total,
+        fetchedAt,
+        rows: res.rows,
+        ...(res.hint !== undefined ? { hint: res.hint } : {}),
+      });
     },
   };
 

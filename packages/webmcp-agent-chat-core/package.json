@@ -1,6 +1,6 @@
 {
   "name": "webmcp-agent-chat-core",
-  "version": "0.1.0",
+  "version": "1.0.0",
   "description": "Agent 对话领域纯逻辑共享库：tool-use 循环、LLM 协议适配（openai-compat / anthropic）、轮次编排控制器。零 UI、零浏览器 API，日志与横切设施经依赖注入，可被扩展 / relay / html-app 等任意宿主导入。",
   "keywords": [
     "ai-agents",
