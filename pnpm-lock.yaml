@@ -81,6 +81,21 @@ importers:
         specifier: ^8.0.0
         version: 8.69.0(eslint@9.39.5)(typescript@5.9.3)
 
+  packages/webmcp-agent-chat-core:
+    devDependencies:
+      '@types/node':
+        specifier: 'catalog:'
+        version: 22.20.1
+      eslint:
+        specifier: 'catalog:'
+        version: 9.39.5
+      typescript:
+        specifier: 'catalog:'
+        version: 5.9.3
+      vitest:
+        specifier: 'catalog:'
+        version: 5.0.0(@types/node@22.20.1)(@vitest/coverage-v8@5.0.0)(jsdom@25.0.1)(vite@8.2.2(@types/node@22.20.1))
+
   packages/webmcp-chrome-extension:
     dependencies:
       '@mcp-b/global':
@@ -98,6 +113,9 @@ importers:
       vue:
         specifier: 'catalog:'
         version: 3.5.42(typescript@5.9.3)
+      webmcp-agent-chat-core:
+        specifier: workspace:*
+        version: link:../webmcp-agent-chat-core
     devDependencies:
       '@mcp-b/webmcp-types':
         specifier: 'catalog:'

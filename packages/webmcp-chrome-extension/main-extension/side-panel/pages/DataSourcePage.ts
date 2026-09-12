@@ -33,19 +33,12 @@ export const DataSourcePage = defineComponent({
      */
     locked: { type: Boolean, default: false },
     /**
-     * relay 状态客户端：「webmcp连接刷新 / relay连接刷新」按钮借此向 SW 发送重建指令；
-     * 未注入时按钮隐藏。
+     * relay 状态客户端：勾选/重置与「webmcp连接刷新 / relay连接刷新」按钮均借此向 SW
+     * 发送请求；未注入时操作区块整体不渲染。
      */
     relayStatus: { type: Object as () => RelayStatusClient | null, default: null },
   },
-  emits: {
-    /** 勾选/取消某个标签页 → App 组合新选中集发给 SW（全端生效）。 */
-    toggleTab: (tabId: number, checked: boolean) =>
-      typeof tabId === 'number' && typeof checked === 'boolean',
-    /** 重置为当前活动页签（单选，覆盖手动多选）。 */
-    resetSelection: () => true,
-  },
-  setup(props, { emit }) {
+  setup(props) {
     const renderStatusSummary = (): VNode => {
       if (props.statuses.length === 0) {
         return h('p', { class: 'relay-page-empty-status' }, '暂无 http(s) 标签页');
@@ -84,7 +77,7 @@ export const DataSourcePage = defineComponent({
                       type: 'checkbox',
                       checked: status.selected === true,
                       onChange: (event: Event) => {
-                        emit('toggleTab', status.tabId, (event.target as HTMLInputElement).checked);
+                        toggleTab(status.tabId, (event.target as HTMLInputElement).checked);
                       },
                     }),
                     h(
@@ -106,11 +99,30 @@ export const DataSourcePage = defineComponent({
           {
             class: 'ghost relay-source-reset',
             type: 'button',
-            onClick: () => emit('resetSelection'),
+            onClick: () => resetSelection(),
           },
           '重置为当前活动页签（单选）'
         ),
       ]);
+    };
+
+    // ---- 数据源选择操作（App 层下沉，2026-09-12 页面级归拢）----
+    // checkbox 勾选仅改选择集合，不受执行锁约束（与原 App.toggleRelayTab 口径一致）。
+
+    /** 勾选/取消某个标签页：合并出新选中集发给 SW（全端生效：relay + agent + 调试）。 */
+    const toggleTab = (tabId: number, checked: boolean): void => {
+      if (!props.relayStatus) return;
+      const next = new Set(props.selection.tabIds);
+      if (checked) next.add(tabId);
+      else next.delete(tabId);
+      props.relayStatus.sendRequest({ type: 'set-selection', tabIds: [...next] });
+      logEvent('info', 'datasource', 'relay_selection_toggle', `tab ${String(tabId)} → ${checked ? 'selected' : 'deselected'}`);
+    };
+
+    /** 重置为当前活动页签（单选，覆盖手动多选，Q5 语义）。 */
+    const resetSelection = (): void => {
+      props.relayStatus?.sendRequest({ type: 'reset-selection' });
+      logEvent('info', 'datasource', 'relay_selection_reset', 'active-tab');
     };
 
     // ---- 连接刷新（重建连接类操作，fire-and-forget，结果经状态快照展示） ----

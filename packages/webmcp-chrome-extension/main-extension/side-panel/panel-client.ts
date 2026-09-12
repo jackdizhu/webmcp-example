@@ -22,7 +22,7 @@ import {
   mergeBuiltinWithPageTools,
   type BuiltinToolContext,
 } from '../../core/builtin-tools';
-import { DEFAULT_SYSTEM_PROMPT } from './agent-loop';
+import { DEFAULT_SYSTEM_PROMPT } from 'webmcp-agent-chat-core';
 
 export interface PageToolsClient {
   /** 获取全部选中页签暴露的工具清单（合并 + 同名去歧义，见模块头注释）。 */
@@ -200,6 +200,28 @@ export async function saveSettings(
     llmSystemPrompt: settings.systemPrompt,
     agentMaxHistoryTurns: settings.maxHistoryTurns,
   });
+}
+
+/**
+ * settings → 待持久化快照（纯浅拷贝，逐字段显式列出）。
+ *
+ * 动机：App 的 settings 是 Vue reactive 代理，saveSettings 前收敛为普通对象，
+ * 避免调用处手写字段列表（新增字段只改这一处）。与 loadSettings/saveSettings
+ * 同居此处，持久化协议三件套对称收口。
+ */
+export function toPanelSettings(settings: PanelSettings): PanelSettings {
+  return {
+    apiKey: settings.apiKey,
+    baseUrl: settings.baseUrl,
+    apiPath: settings.apiPath,
+    model: settings.model,
+    apiProtocol: settings.apiProtocol,
+    maxTokens: settings.maxTokens,
+    debugMode: settings.debugMode,
+    consoleOutput: settings.consoleOutput,
+    systemPrompt: settings.systemPrompt,
+    maxHistoryTurns: settings.maxHistoryTurns,
+  };
 }
 
 /** 单个页签的连接状态（一条 Port + 独立重连循环 + 独立请求表）。 */

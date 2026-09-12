@@ -1,15 +1,21 @@
-// LLM HTTP 协议客户端（R4 决策：仅支持 openai-compat 与 anthropic 两个协议适配器）。
-// 仅依赖 fetch —— 扩展页面上下文仅对 host_permissions 已授权的主机豁免 CORS
-//（https://*/* 与 localhost/127.0.0.1 已授权；通用 http 主机不授权，见探索文档 §3.1），
-// 注入 fetchImpl 以便单元测试。
+// LLM HTTP 协议适配层（共享库 webmcp-agent-chat-core）。
+// 仅依赖 fetch —— 适配 openai-compat 与 anthropic 两个协议（R4 决策），注入 fetchImpl
+// 供无 fetch 环境或单元测试替换。
+//
 // 埋点红线：日志只记 URL/模型/数量/耗时/状态，绝不记录 Authorization 头与消息体。
+// 日志落点经 onLog 注入（宿主接自己的日志设施，如 side-panel 的 logEvent），
+// 共享库不得反向依赖宿主模块；onLog 收到的 payload 不含鉴权信息，可原样落盘。
 import type { AgentTool, ChatMessage, LlmChatClient } from './agent-loop';
-import { logEvent } from './logger';
+
+/** 日志钩子：level 对齐常见日志分级，event 为事件名，payload 为结构化明细（不含鉴权数据）。 */
+export type LlmLogFn = (level: 'debug' | 'info' | 'warn' | 'error', event: string, payload?: unknown) => void;
+
+const noopLog: LlmLogFn = () => {};
 
 /** apiPath 显式配置为空串时的提示文案（不回退默认路径，阻断请求）。 */
 export const API_PATH_EMPTY_HINT = '请配置apiPath，如：/chat/completions';
 
-/** LLM 服务配置（API Key 存 chrome.storage.local，禁止硬编码）。 */
+/** LLM 服务配置（API Key 由宿主持有与持久化，禁止硬编码）。 */
 export interface LlmConfig {
   apiKey: string;
   /** 形如 https://api.deepseek.com 的基础地址（不含请求路径；最终端点为 baseUrl + apiPath）。 */
@@ -87,8 +93,13 @@ export function toWireTools(tools: readonly AgentTool[]): Array<{
  *
  * @param config 服务配置
  * @param fetchImpl fetch 实现，默认全局 fetch（测试注入桩）
+ * @param onLog 日志钩子（默认 no-op；宿主接入自己的日志设施）
  */
-export function createOpenAiCompatClient(config: LlmConfig, fetchImpl: typeof fetch = fetch): LlmChatClient {
+export function createOpenAiCompatClient(
+  config: LlmConfig,
+  fetchImpl: typeof fetch = fetch,
+  onLog: LlmLogFn = noopLog
+): LlmChatClient {
   return {
     async complete(messages, tools, signal) {
       // apiPath 语义：undefined 回退默认路径；显式空串不回退，阻断请求并提示配置
@@ -103,7 +114,7 @@ export function createOpenAiCompatClient(config: LlmConfig, fetchImpl: typeof fe
       // 无工具时省略 tools 字段，兼容对空数组敏感的服务端
       if (tools.length > 0) body['tools'] = toWireTools(tools);
 
-      logEvent('info', 'llm', 'llm_request', {
+      onLog('info', 'llm_request', {
         url,
         model: config.model,
         messageCount: messages.length,
@@ -124,7 +135,7 @@ export function createOpenAiCompatClient(config: LlmConfig, fetchImpl: typeof fe
           ...(signal ? { signal } : {}),
         });
       } catch (error) {
-        logEvent('error', 'llm', 'llm_error', {
+        onLog('error', 'llm_error', {
           url,
           model: config.model,
           error: error instanceof Error ? error.message : String(error),
@@ -134,7 +145,7 @@ export function createOpenAiCompatClient(config: LlmConfig, fetchImpl: typeof fe
 
       if (!response.ok) {
         const detail = await response.text().catch(() => '');
-        logEvent('error', 'llm', 'llm_error', {
+        onLog('error', 'llm_error', {
           url,
           model: config.model,
           status: response.status,
@@ -148,7 +159,7 @@ export function createOpenAiCompatClient(config: LlmConfig, fetchImpl: typeof fe
       if (!message) {
         throw new Error('LLM 响应缺少 choices[0].message 字段');
       }
-      logEvent('info', 'llm', 'llm_response', {
+      onLog('info', 'llm_response', {
         url,
         model: config.model,
         elapsedMs: Date.now() - startedAt,
@@ -248,8 +259,13 @@ export function toAnthropicMessages(messages: readonly ChatMessage[]): {
  *
  * @param config 服务配置（maxTokens 缺省 4096，协议必填）
  * @param fetchImpl fetch 实现，默认全局 fetch（测试注入桩）
+ * @param onLog 日志钩子（默认 no-op）
  */
-export function createAnthropicClient(config: LlmConfig, fetchImpl: typeof fetch = fetch): LlmChatClient {
+export function createAnthropicClient(
+  config: LlmConfig,
+  fetchImpl: typeof fetch = fetch,
+  onLog: LlmLogFn = noopLog
+): LlmChatClient {
   return {
     async complete(messages, tools, signal) {
       const apiPath = config.apiPath ?? '/v1/messages';
@@ -272,7 +288,7 @@ export function createAnthropicClient(config: LlmConfig, fetchImpl: typeof fetch
         }));
       }
 
-      logEvent('info', 'llm', 'llm_request', {
+      onLog('info', 'llm_request', {
         url,
         protocol: 'anthropic',
         model: config.model,
@@ -294,7 +310,7 @@ export function createAnthropicClient(config: LlmConfig, fetchImpl: typeof fetch
           ...(signal ? { signal } : {}),
         });
       } catch (error) {
-        logEvent('error', 'llm', 'llm_error', {
+        onLog('error', 'llm_error', {
           url,
           protocol: 'anthropic',
           model: config.model,
@@ -305,7 +321,7 @@ export function createAnthropicClient(config: LlmConfig, fetchImpl: typeof fetch
 
       if (!response.ok) {
         const detail = await response.text().catch(() => '');
-        logEvent('error', 'llm', 'llm_error', {
+        onLog('error', 'llm_error', {
           url,
           protocol: 'anthropic',
           model: config.model,
@@ -334,7 +350,7 @@ export function createAnthropicClient(config: LlmConfig, fetchImpl: typeof fetch
       if (content.length === 0 && toolCalls.length === 0) {
         throw new Error('LLM 响应缺少 content 内容块');
       }
-      logEvent('info', 'llm', 'llm_response', {
+      onLog('info', 'llm_response', {
         url,
         protocol: 'anthropic',
         model: config.model,
@@ -358,9 +374,13 @@ export function createAnthropicClient(config: LlmConfig, fetchImpl: typeof fetch
  * 按协议类型创建 LLM 客户端（R4 决策：仅 openai-compat / anthropic 两个适配器）。
  * apiProtocol 缺省回退 openai-compat（兼容存量配置）。
  */
-export function createLlmClient(config: LlmConfig, fetchImpl: typeof fetch = fetch): LlmChatClient {
+export function createLlmClient(
+  config: LlmConfig,
+  fetchImpl: typeof fetch = fetch,
+  onLog: LlmLogFn = noopLog
+): LlmChatClient {
   if (config.apiProtocol === 'anthropic') {
-    return createAnthropicClient(config, fetchImpl);
+    return createAnthropicClient(config, fetchImpl, onLog);
   }
-  return createOpenAiCompatClient(config, fetchImpl);
+  return createOpenAiCompatClient(config, fetchImpl, onLog);
 }

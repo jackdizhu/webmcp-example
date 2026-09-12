@@ -1,0 +1,44 @@
+{
+  "name": "webmcp-agent-chat-core",
+  "version": "0.1.0",
+  "description": "Agent 对话领域纯逻辑共享库：tool-use 循环、LLM 协议适配（openai-compat / anthropic）、轮次编排控制器。零 UI、零浏览器 API，日志与横切设施经依赖注入，可被扩展 / relay / html-app 等任意宿主导入。",
+  "keywords": [
+    "ai-agents",
+    "agent-loop",
+    "llm",
+    "mcp",
+    "webmcp"
+  ],
+  "license": "MIT",
+  "author": "jackdizhu",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/jackdizhu/webmcp-example.git",
+    "directory": "packages/webmcp-agent-chat-core"
+  },
+  "type": "module",
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "files": [
+    "src",
+    "dist"
+  ],
+  "scripts": {
+    "test": "vitest run",
+    "typecheck": "tsc -p tsconfig.check.json --noEmit",
+    "lint": "eslint .",
+    "clean": "node -e \"require('fs').rmSync('dist',{recursive:true,force:true})\""
+  },
+  "devDependencies": {
+    "@types/node": "catalog:",
+    "eslint": "catalog:",
+    "typescript": "catalog:",
+    "vitest": "catalog:"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}
