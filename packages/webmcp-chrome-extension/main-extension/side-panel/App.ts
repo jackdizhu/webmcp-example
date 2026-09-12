@@ -22,6 +22,7 @@ import {
   setCurrentTrace,
 } from './trace-context';
 import {
+  attachBuiltinTools,
   connectPageTools,
   loadSettings,
   saveSettings,
@@ -29,7 +30,6 @@ import {
   type PanelSettings,
 } from './panel-client';
 import { connectRelayStatus } from './relay-status-client';
-import { executeBuiltinTool, isBuiltinTool, mergeBuiltinWithPageTools } from '../../core/builtin-tools';
 import type { RelayInvokeLogEntry, RelayTabSelection, RelayTabStatus } from '../../core/relay-status-protocol';
 import { AppHeader } from './components/AppHeader';
 import { RelayStatusBar } from './components/RelayStatusBar';
@@ -119,8 +119,8 @@ export const App = defineComponent({
     const refreshTools = async (): Promise<void> => {
       if (!pageTools) return;
       try {
-        // 工具数含内置工具（chrome_extension_*，双端统一注册表）
-        toolsCount.value = mergeBuiltinWithPageTools(await pageTools.listTools()).length;
+        // 工具数含内置工具（chrome_extension_*，attachBuiltinTools 已合并）
+        toolsCount.value = (await pageTools.listTools()).length;
       } catch {
         toolsCount.value = 0;
       }
@@ -182,8 +182,8 @@ export const App = defineComponent({
 
       try {
         // 每轮发送前刷新工具清单，保证页面工具变化（listChanged）能被感知；
-        // 清单合并内置工具（chrome_extension_*，双端统一注册表）
-        const tools: AgentTool[] = mergeBuiltinWithPageTools(await pageTools.listTools());
+        // 清单含内置工具（chrome_extension_*，由 attachBuiltinTools 合成）
+        const tools: AgentTool[] = await pageTools.listTools();
         toolsCount.value = tools.length;
 
         const llm = createLlmClient({
@@ -210,13 +210,8 @@ export const App = defineComponent({
           tools,
           {
             llm,
-            // 内置工具（chrome_extension_*）在扩展上下文执行；页面工具按名路由
-            executeTool: (name, args) =>
-              isBuiltinTool(name)
-                ? executeBuiltinTool(name, args, {
-                    getSelectedTabIds: () => relaySelection.value.tabIds,
-                  })
-                : pageTools!.callTool(name, args),
+            // 内置工具与页面工具统一经合成客户端路由（内置名在扩展上下文执行）
+            executeTool: (name, args) => pageTools!.callTool(name, args),
           },
           loopOptions
         );
@@ -397,7 +392,11 @@ export const App = defineComponent({
       // 调试模式：侧栏打开时默认进入 tools 调试页
       if (settings.debugMode) activeTab.value = 'debug';
 
-      pageTools = connectPageTools();
+      // 页面工具客户端 + 内置工具合成：agent 对话与 tools 调试页共用同一实例，
+      // 内置工具的「当前选中页签」直接取全局选择快照（relaySelection）
+      pageTools = attachBuiltinTools(connectPageTools(), {
+        getSelectedTabIds: () => relaySelection.value.tabIds,
+      });
       pageToolsRef.value = pageTools;
       unsubscribeStatus = pageTools.onStatusChange((value) => {
         const wasConnected = connected.value;

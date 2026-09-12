@@ -164,6 +164,27 @@
       .debug-error { font-size: 12px; color: #a32d2d; }
       .debug-actions { display: flex; gap: 8px; }
 
+      /* 参数说明面板（inputSchema 解析结果，辅助构造合法参数） */
+      .debug-params { display: flex; flex-direction: column; gap: 6px; }
+      .debug-params h4 { margin: 0; font-size: 12px; color: #374151; }
+      .debug-params-empty { margin: 0; font-size: 11px; color: #6b7280; }
+      .debug-params-list {
+        list-style: none; margin: 0; padding: 0;
+        display: flex; flex-direction: column; gap: 6px;
+      }
+      .debug-param { border: 1px solid #e5e7eb; border-radius: 6px; padding: 6px 8px; background: #f9fafb; }
+      .debug-param-head { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+      .debug-param-name { font-size: 12px; font-weight: 600; color: #111827; }
+      .debug-param-type { font-size: 11px; color: #7c3aed; }
+      .badge-required, .badge-optional {
+        font-size: 10px; border-radius: 4px; padding: 0 4px; line-height: 16px;
+      }
+      .badge-required { color: #a32d2d; background: #fee2e2; }
+      .badge-optional { color: #6b7280; background: #eef2f7; }
+      .debug-param-default { font-size: 10px; color: #6b7280; }
+      .debug-param-desc { margin: 4px 0 0; font-size: 11px; color: #4b5563; }
+      .debug-param-enum { margin: 2px 0 0; font-size: 11px; color: #6b7280; }
+
       .debug-result {
         border: 1px solid #e5e7eb; border-radius: 8px; padding: 8px 10px;
         display: flex; flex-direction: column; gap: 6px;

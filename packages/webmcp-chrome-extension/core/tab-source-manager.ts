@@ -675,7 +675,9 @@ export function startTabSourceManager(options: TabSourceManagerOptions = {}): {
     options.clientFactory ??
     ((input: { tabId: number; source: RelaySourceMeta; facade: RelayToolsFacade }) => {
       // 内置工具合并（Q6 双端统一）：listTools 内置描述在前（页面占用内置命名空间的剔除），
-      // callTool 内置名优先路由 —— 外部 MCP 客户端经 relay 也能调用内置工具
+      // callTool 内置名优先路由 —— 外部 MCP 客户端经 relay 也能调用内置工具。
+      // 内置工具返回 MCP CallToolResult（executeBuiltinTool 内部已包装），
+      // 与页面工具同构，relay 的 CallToolResultSchema 校验可原样通过
       const pageFacade = input.facade;
       const facadeWithBuiltins: RelayToolsFacade = {
         listTools: async () => mergeBuiltinWithPageTools(await pageFacade.listTools()),

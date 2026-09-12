@@ -16,6 +16,12 @@ import {
   type PageToolsRequest,
   type PageToolsResponse,
 } from '../../core/page-tools-bridge';
+import {
+  executeBuiltinTool,
+  isBuiltinTool,
+  mergeBuiltinWithPageTools,
+  type BuiltinToolContext,
+} from '../../core/builtin-tools';
 import { DEFAULT_SYSTEM_PROMPT } from './agent-loop';
 
 export interface PageToolsClient {
@@ -33,8 +39,45 @@ export interface PageToolsClient {
   disconnect(): void;
 }
 
-/** 侧边栏设置（持久化到 chrome.storage.local）。 */
-export interface PanelSettings {
+/**
+ * 给页面工具客户端叠加内置工具（chrome_extension_*，双端统一注册表的侧栏入口）：
+ * - listTools 合并内置描述（内置在前；页面工具占用内置命名空间时剔除，内置优先）；
+ * - callTool 内置名优先路由到扩展上下文执行（executeBuiltinTool），其余透传页面工具。
+ *   内置工具与页面工具统一返回 MCP CallToolResult 形态（`{content, isError}`），
+ *   调用方（agent 循环 / 调试页）无需分支处理两种形状。
+ *
+ * 连接语义完全委托入参客户端（setTargetTabs / 状态与清单订阅 / disconnect），
+ * 因此 agent 对话与 tools 调试页可共用同一份实例 —— 避免两处各自拦截导致行为漂移。
+ */
+export function attachBuiltinTools(
+  pageTools: PageToolsClient,
+  context: BuiltinToolContext
+): PageToolsClient {
+  return {
+    async listTools() {
+      return mergeBuiltinWithPageTools(await pageTools.listTools());
+    },
+    callTool(name, args) {
+      return isBuiltinTool(name)
+        ? executeBuiltinTool(name, args, context)
+        : pageTools.callTool(name, args);
+    },
+    setTargetTabs(tabIds) {
+      pageTools.setTargetTabs(tabIds);
+    },
+    onStatusChange(listener) {
+      return pageTools.onStatusChange(listener);
+    },
+    onToolsChange(listener) {
+      return pageTools.onToolsChange(listener);
+    },
+    disconnect() {
+      pageTools.disconnect();
+    },
+  };
+}
+
+/** 侧边栏设置（持久化到 chrome.storage.local）。 */export interface PanelSettings {
   apiKey: string;
   baseUrl: string;
   /** chat completions 请求路径；空串 = 用户显式清空（不回退默认，发请求前会提示配置）。 */

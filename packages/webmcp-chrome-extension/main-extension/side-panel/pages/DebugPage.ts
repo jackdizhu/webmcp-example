@@ -1,13 +1,15 @@
 // 调试页（页面功能级）：不经过 LLM，直接通过 Port 桥接手动执行页面工具并查看结果。
 // 纯逻辑（校验/格式化/历史/消息组装）全部在 debugger-core.ts，本组件仅做状态装配。
 // 模板用 h() 渲染函数（MV3 扩展页 CSP 禁止 eval，运行时字符串编译会白屏，见 issues/001）。
-import { defineComponent, h, ref, watch, type VNode } from 'vue';
+import { computed, defineComponent, h, ref, watch, type VNode } from 'vue';
 import { serializeToolResult, type PageToolMeta } from '../../../core/page-tools-bridge';
 import { logEvent } from '../logger';
 import type { PageToolsClient } from '../panel-client';
 import type { RelayStatusClient } from '../relay-status-client';
 import {
   appendRun,
+  buildArgsTemplate,
+  describeInputSchema,
   formatRawJson,
   validateArgsText,
   type ArgsValidation,
@@ -74,6 +76,20 @@ export const DebugPage = defineComponent({
 
     const selectedTool = (): PageToolMeta | undefined =>
       tools.value.find((tool) => tool.name === selected.value);
+
+    /**
+     * 当前工具的入参说明（解析 inputSchema.properties，按声明顺序）。
+     * 含内置工具（chrome_extension_*）—— 清单已由 attachBuiltinTools 合成。
+     */
+    const parameters = computed(() => describeInputSchema(selectedTool()?.inputSchema));
+
+    /** 「填入参数模板」：按 schema 生成参数骨架写入编辑器（覆盖当前文本）。 */
+    const fillArgsTemplate = (): void => {
+      const tool = selectedTool();
+      if (!tool) return;
+      argsText.value = JSON.stringify(buildArgsTemplate(tool.inputSchema), null, 2);
+      validationError.value = '';
+    };
 
     const formatArgs = (): void => {
       const check: ArgsValidation = validateArgsText(argsText.value);
@@ -163,6 +179,49 @@ export const DebugPage = defineComponent({
 
     // ---- 渲染函数 ----
 
+    /** 参数说明面板：列出每个入参的类型 / 必填 / 默认值 / 说明，便于构造合法参数。 */
+    const renderParameters = (): VNode | null => {
+      if (!selectedTool()) return null;
+      const list = parameters.value;
+      return h('section', { class: 'debug-params' }, [
+        h('h4', '参数说明'),
+        list.length === 0
+          ? h('p', { class: 'debug-params-empty' }, '该工具无需参数（留空即视为 {}）')
+          : h(
+              'ul',
+              { class: 'debug-params-list' },
+              list.map((param) =>
+                h('li', { key: param.name, class: 'debug-param' }, [
+                  h('div', { class: 'debug-param-head' }, [
+                    h('code', { class: 'debug-param-name' }, param.name),
+                    h('span', { class: 'debug-param-type' }, param.type),
+                    h(
+                      'span',
+                      { class: param.required ? 'badge-required' : 'badge-optional' },
+                      param.required ? '必填' : '可选'
+                    ),
+                    param.hasDefault
+                      ? h(
+                          'span',
+                          { class: 'debug-param-default' },
+                          `默认 ${JSON.stringify(param.defaultValue) ?? 'undefined'}`
+                        )
+                      : null,
+                  ]),
+                  param.description ? h('p', { class: 'debug-param-desc' }, param.description) : null,
+                  param.enumValues.length > 0
+                    ? h(
+                        'p',
+                        { class: 'debug-param-enum' },
+                        `可选值：${param.enumValues.join(' / ')}`
+                      )
+                    : null,
+                ])
+              )
+            ),
+      ]);
+    };
+
     const renderForm = (): VNode => {
       const tool = selectedTool();
       return h('section', { class: 'debug-form' }, [
@@ -186,6 +245,7 @@ export const DebugPage = defineComponent({
           ),
         ]),
         tool?.description ? h('p', { class: 'debug-desc' }, tool.description) : null,
+        renderParameters(),
         h('label', [
           h('span', '参数（JSON）'),
           h('textarea', {
@@ -214,6 +274,16 @@ export const DebugPage = defineComponent({
             running.value ? '执行中…' : '执行'
           ),
           h('button', { class: 'ghost', type: 'button', disabled: running.value || props.locked, onClick: formatArgs }, '格式化'),
+          h(
+            'button',
+            {
+              class: 'ghost',
+              type: 'button',
+              disabled: running.value || props.locked || selected.value.length === 0,
+              onClick: fillArgsTemplate,
+            },
+            '填入参数模板'
+          ),
           h('button', { class: 'ghost', type: 'button', disabled: running.value || props.locked, onClick: () => void refreshTools() }, 'tools刷新'),
         ]),
         // 连接重建区：与「tools刷新」（仅重新拉取清单）不同，以下按钮触发 SW 侧

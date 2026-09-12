@@ -1,10 +1,13 @@
 // panel-client 单测（2026-09-12 多页签编排改造）：
 // 连接目标 = setTargetTabs 下发的全局选中页签集合；每页签一条 Port；
 // listTools 合并 + 同名工具 tab<id>__ 前缀去歧义；callTool 按路由表投递；
-// 断线重连按页签独立进行（不再监听 onActivated 自动跟随）。
+// 断线重连按页签独立进行（不再监听 onActivated 自动跟随）；
+// attachBuiltinTools 叠加内置工具（chrome_extension_*，agent 与调试页共用）。
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { connectPageTools, loadSettings, saveSettings } from './panel-client';
-import type { PageToolsRequest, PageToolsResponse } from '../../core/page-tools-bridge';
+import { attachBuiltinTools, connectPageTools, loadSettings, saveSettings } from './panel-client';
+import type { PageToolsClient } from './panel-client';
+import type { PageToolMeta, PageToolsRequest, PageToolsResponse } from '../../core/page-tools-bridge';
+import { GET_DOCUMENT_INFO_TOOL_NAME } from '../../core/builtin-tools';
 
 type MessageListener = (message: unknown) => void;
 type DisconnectListener = () => void;
@@ -450,5 +453,107 @@ describe('loadSettings / saveSettings', () => {
     expect(settings.maxHistoryTurns).toBe(3);
     expect(settings.apiProtocol).toBe('anthropic');
     expect(settings.maxTokens).toBe(2048);
+  });
+});
+
+describe('attachBuiltinTools 内置工具合成', () => {
+  /** 页面工具客户端桩：记录 listTools/callTool 调用，连接语义用可断言 spies。 */
+  const makeStub = (tools: PageToolMeta[]) => {
+    const calls: Array<{ name: string; args: Record<string, unknown> }> = [];
+    const setTargetTabs = vi.fn();
+    const disconnect = vi.fn();
+    const statusListeners: Array<(connected: boolean) => void> = [];
+    const toolsListeners: Array<() => void> = [];
+    const offStatus = vi.fn();
+    const offTools = vi.fn();
+    const client: PageToolsClient = {
+      listTools: async () => tools,
+      callTool: async (name, args) => {
+        calls.push({ name, args });
+        return { fromPage: name };
+      },
+      setTargetTabs,
+      onStatusChange: (listener) => {
+        statusListeners.push(listener);
+        return offStatus;
+      },
+      onToolsChange: (listener) => {
+        toolsListeners.push(listener);
+        return offTools;
+      },
+      disconnect,
+    };
+    return { client, calls, setTargetTabs, disconnect, statusListeners, toolsListeners, offStatus, offTools };
+  };
+
+  const pageTool = (name: string): PageToolMeta => ({ name, description: `页面工具 ${name}`, inputSchema: {} });
+
+  it('listTools 内置描述在前，页面工具占用内置命名空间时剔除（内置优先）', async () => {
+    const stub = makeStub([pageTool('page_tool'), pageTool(GET_DOCUMENT_INFO_TOOL_NAME)]);
+    const client = attachBuiltinTools(stub.client, { getSelectedTabIds: () => [] });
+
+    const tools = await client.listTools();
+    expect(tools.map((tool) => tool.name)).toEqual([GET_DOCUMENT_INFO_TOOL_NAME, 'page_tool']);
+    // 同名页面工具被剔除：内置描述来自注册表而非页面
+    expect(tools[0]?.description).toContain('获取当前选中页签');
+  });
+
+  it('callTool：内置名在扩展上下文执行，不投递页面桥接；其余透传', async () => {
+    const stub = makeStub([pageTool('page_tool')]);
+    const collected: number[] = [];
+    const client = attachBuiltinTools(stub.client, {
+      getSelectedTabIds: () => [3],
+      collectFromTab: async (tabId) => {
+        collected.push(tabId);
+        return {
+          url: 'https://a.com/',
+          title: 'A',
+          readyState: 'complete',
+          characterSet: 'UTF-8',
+          contentType: 'text/html',
+          doctype: 'html',
+          viewport: '',
+          lang: 'zh-CN',
+          meta: {},
+          counts: { domNodes: 1, links: 0, images: 0, scripts: 0, iframes: 0 },
+          headings: [],
+        };
+      },
+    });
+
+    const builtinResult = (await client.callTool(GET_DOCUMENT_INFO_TOOL_NAME, {})) as {
+      content: Array<{ type: string; text: string }>;
+      isError: boolean;
+    };
+    expect(collected).toEqual([3]);
+    // 内置工具与页面工具同构：MCP CallToolResult（relay 端 schema 校验可直接通过）
+    expect(builtinResult.isError).toBe(false);
+    expect(builtinResult.content[0]?.type).toBe('text');
+    expect(JSON.parse(builtinResult.content[0]!.text)).toMatchObject([{ tabId: 3 }]);
+    expect(stub.calls).toHaveLength(0);
+
+    await client.callTool('page_tool', { a: 1 });
+    expect(stub.calls).toEqual([{ name: 'page_tool', args: { a: 1 } }]);
+  });
+
+  it('连接语义全部委托底层客户端', () => {
+    const stub = makeStub([]);
+    const client = attachBuiltinTools(stub.client, { getSelectedTabIds: () => [] });
+
+    client.setTargetTabs([1, 2]);
+    expect(stub.setTargetTabs).toHaveBeenCalledWith([1, 2]);
+
+    const statusListener = vi.fn();
+    const toolsListener = vi.fn();
+    const offStatus = client.onStatusChange(statusListener);
+    const offTools = client.onToolsChange(toolsListener);
+    expect(stub.statusListeners).toEqual([statusListener]);
+    expect(stub.toolsListeners).toEqual([toolsListener]);
+    // 订阅返回的取消函数直接透传
+    expect(offStatus).toBe(stub.offStatus);
+    expect(offTools).toBe(stub.offTools);
+
+    client.disconnect();
+    expect(stub.disconnect).toHaveBeenCalledOnce();
   });
 });
