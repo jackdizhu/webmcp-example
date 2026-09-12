@@ -36,6 +36,7 @@ import { RelayStatusBar } from './components/RelayStatusBar';
 import { TabBar, type PanelPage } from './components/TabBar';
 import { TOOL_PENDING_TEXT, type UiMessage } from './components/types';
 import { ChatPage } from './pages/ChatPage';
+import { DataSourcePage } from './pages/DataSourcePage';
 import { DebugPage } from './pages/DebugPage';
 import { RelayPage } from './pages/RelayPage';
 import { SettingsPage } from './pages/SettingsPage';
@@ -60,7 +61,7 @@ export const App = defineComponent({
       systemPrompt: '',
       maxHistoryTurns: 0,
     });
-    /** 顶部页面路由：agent 对话 / tools 调试 / relay 调用 / 设置。 */
+    /** 顶部页面路由：agent 对话 / tools 调试 / relay 调用 / 数据源设置 / 设置。 */
     const activeTab = ref<PanelPage>('chat');
     /** 供渲染调试组件使用的客户端引用（onMounted 后非空）。 */
     const pageToolsRef = ref<PageToolsClient | null>(null);
@@ -238,7 +239,7 @@ export const App = defineComponent({
     /** 全局标签页数据源选择（SW 推送；默认 = 打开侧栏时的活动页签，多选全端生效）。 */
     const relaySelection = ref<RelayTabSelection>({ tabIds: [] });
 
-    /** relay 页 checkbox 勾选：合并出新选中集发给 SW（全端生效：relay + agent + 调试）。 */
+    /** 数据源设置页 checkbox 勾选：合并出新选中集发给 SW（全端生效：relay + agent + 调试）。 */
     const toggleRelayTab = (tabId: number, checked: boolean): void => {
       if (!relayStatusClient) return;
       const next = new Set(relaySelection.value.tabIds);
@@ -248,7 +249,7 @@ export const App = defineComponent({
       logEvent('info', 'relay', 'relay_selection_toggle', `tab ${String(tabId)} → ${checked ? 'selected' : 'deselected'}`);
     };
 
-    /** relay 页「重置」：回到默认（当前活动页签，单选；覆盖手动多选，Q5 语义）。 */
+    /** 数据源设置页「重置」：回到默认（当前活动页签，单选；覆盖手动多选，Q5 语义）。 */
     const resetRelaySelection = (): void => {
       relayStatusClient?.sendRequest({ type: 'reset-selection' });
       logEvent('info', 'relay', 'relay_selection_reset', 'active-tab');
@@ -313,17 +314,6 @@ export const App = defineComponent({
       systemPrompt: settings.systemPrompt,
       maxHistoryTurns: settings.maxHistoryTurns,
     });
-
-    /** 设置页「快速切换调试模式」：立即持久化并生效，不等「保存」按钮。 */
-    const toggleDebugMode = async (): Promise<void> => {
-      settings.debugMode = !settings.debugMode;
-      await saveSettings(toPanelSettings());
-      logEvent('info', 'app', 'debug_mode_toggled', settings.debugMode ? 'on' : 'off');
-      if (settings.debugMode) {
-        // 开启：直达 tools 调试页（一键入口的核心诉求）
-        setTab('debug');
-      }
-    };
 
     const persistSettings = async (): Promise<void> => {
       await saveSettings(toPanelSettings());
@@ -410,7 +400,7 @@ export const App = defineComponent({
         void refreshTools();
       });
 
-      // relay 连接状态 + 调用日志 + 全局标签页选择订阅：状态栏 / relay 调用页 / 日志管线
+      // relay 连接状态 + 调用日志 + 全局标签页选择订阅：状态栏 / 数据源设置页 / 调用日志页
       relayStatusClient = connectRelayStatus();
       unsubscribeRelayStatus = relayStatusClient.onUpdate(applyRelayStatuses);
       unsubscribeInvokeLogs = relayStatusClient.onInvokeLogs((entries) => {
@@ -479,7 +469,6 @@ export const App = defineComponent({
               pageTools: pageToolsRef.value,
               active: activeTab.value === 'debug',
               locked: locked.value,
-              relayStatus: relayStatusClient,
               onHandoff: (run: DebugRun) => {
                 void handleHandoff(run);
               },
@@ -487,11 +476,16 @@ export const App = defineComponent({
           : null,
         h(RelayPage, {
           active: activeTab.value === 'relay',
-          statuses: relayStatuses.value,
-          selection: relaySelection.value,
           invokeLogs: invokeLogs.value,
           runningCount: relayRunningCount.value,
           terminated: relayTerminated.value,
+        }),
+        h(DataSourcePage, {
+          active: activeTab.value === 'datasource',
+          statuses: relayStatuses.value,
+          selection: relaySelection.value,
+          locked: locked.value,
+          relayStatus: relayStatusClient,
           onToggleTab: toggleRelayTab,
           onResetSelection: resetRelaySelection,
         }),
@@ -502,7 +496,6 @@ export const App = defineComponent({
           logCountText: logCountText.value,
           logHint: logHint.value,
           onSave: () => void persistSettings(),
-          onToggleDebug: () => void toggleDebugMode(),
           onExportLogs: () => void handleExportLogs(),
           onClearLogs: () => void handleClearLogs(),
         }),

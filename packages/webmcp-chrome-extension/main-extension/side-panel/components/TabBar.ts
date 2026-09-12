@@ -1,16 +1,18 @@
-// Tab 切换栏：agent 对话 / tools 调试 / relay 调用 / 设置 四个页面入口。
+// Tab 切换栏：agent 对话 / tools 调试 / relay 调用 / 数据源设置 / 设置 五个页面入口。
+// 页签较多：容器横向滚动（.tabs overflow-x，见 side-panel.html），按钮不收缩换行。
 // 执行锁（locked）生效期间：全部入口禁用，仅保留「终止」按钮，避免执行中
 // 切换页面造成状态错乱（App 层负责锁的置位与终止动作）。
 import { defineComponent, h } from 'vue';
 
 /** 侧栏页面标识。 */
-export type PanelPage = 'chat' | 'debug' | 'relay' | 'settings';
+export type PanelPage = 'chat' | 'debug' | 'relay' | 'datasource' | 'settings';
 
 /** 页面入口定义（顺序即展示顺序）。 */
 const PAGES: Array<{ id: PanelPage; label: string }> = [
   { id: 'chat', label: 'agent 对话' },
   { id: 'debug', label: 'tools 调试' },
   { id: 'relay', label: 'relay 调用' },
+  { id: 'datasource', label: '数据源设置' },
   { id: 'settings', label: '设置' },
 ];
 

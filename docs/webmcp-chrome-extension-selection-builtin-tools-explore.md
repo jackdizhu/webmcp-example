@@ -392,9 +392,35 @@ Anthropic 适配器要点【推断，实现前对照官方文档复核】：
   - 同名冲突时仅暴露首个命中页签（简单，但静默丢失其他页签工具）。
   → propose 阶段二选一，倾向前缀方案。
 - **在线状态语义**：`connected` 从布尔位变为逐页签状态聚合（全部离线才显示离线，或展示 n/m 已连）。
-- **断线重连**：退避重连按各页签独立进行，重连目标 = 各自 tabId（不重查活动页签）。
+- **断线重连**：退避重连按各页签独立进行，重连目标 =各自 tabId（不重查活动页签）。
 - **R5.1 联动**：`chrome_extension_get_document_info` 在多选下对每个选中页签各执行一次注入收集，按下标/页签顺序返回数组 —— 单选时长度 1，天然满足「每选中页签一个元素」。
 - 【推断】工具清单变化推送（toolsChanged）需按 Port 来源归并去抖，避免多 Port 同时推送导致 agent 每轮 listTools 抖动。
+
+---
+
+## 6.5 页面结构调整：数据源设置独立成页（2026-09-12）
+
+**需求**（用户提出）：① 「数据源选择」拆分为独立的**数据源设置**页，与 agent 对话 / tools 调试 / 设置平级，页签支持横向滚动；② 「webmcp连接刷新 / relay连接刷新」按钮迁移到数据源设置页；③ tools 调试已是独立页签，设置页的调试模式开关移除。
+
+**现状缺口**【已验证】：
+
+| 项 | 调整前 | 位置 |
+| ---- | ---- | ---- |
+| 数据源选择 | 内嵌在「relay 调用」页（与调用日志混排） | `RelayPage.ts` `renderSourcePicker` |
+| 连接刷新按钮 | 在「tools 调试」页表单底部 | `DebugPage.ts`（`recreateConnection` + 两个按钮） |
+| 调试模式开关 | 设置页 checkbox + 「⚡ 快速开启/关闭」按钮 | `SettingsPanel.ts` / App `toggleDebugMode` |
+
+**调整后**：
+
+- 页签 5 个：`agent 对话 / tools 调试 / relay 调用 / 数据源设置 / 设置`（`PanelPage` 增加 `'datasource'`）；`.tabs` 改 `overflow-x: auto` + 按钮 `flex: 1 0 auto; white-space: nowrap` —— 空间充足时均分填满，不足时横向滚动；
+- 新增 `pages/DataSourcePage.ts`：状态摘要（已连接 X · 已选 Y/Z）+ 数据源 checkbox 列表（复用 `.relay-source-*` 样式）+ 重置按钮 + 连接刷新区（`recreateConnection` 逻辑随迁，受执行锁约束，`relayStatus` prop 注入）；
+- `RelayPage` 瘦身为**纯 relay 调用日志**（移除 statuses/selection props 与 toggle/reset emits；空态文案指引前往「数据源设置」页）；
+- `DebugPage` 移除连接重建区与 `relayStatus` prop（`tools刷新` 保留）；
+- **调试模式开关（用户决策：仅删 UI 保留行为）**：删除 SettingsPanel 的 checkbox + 快速按钮与 `toggle-debug` emit 链、App 的 `toggleDebugMode`；`debugMode` **字段保留**（`PanelSettings`、存储读写、App「侧栏打开默认进 tools 调试页」行为均不动）—— 存量已开启用户不受影响，但之后无 UI 可再切换。
+
+**改动文件**：`components/TabBar.ts` / `pages/DataSourcePage.ts`（新增）/ `pages/RelayPage.ts` / `pages/DebugPage.ts` / `components/SettingsPanel.ts` / `pages/SettingsPage.ts` / `App.ts`（编排）/ `side-panel.html`（tabs 滚动 + `.datasource-page` 容器样式）。
+
+**验证**：typecheck ✓ / lint ✓ / vitest **187/187** ✓（UI 组件无既有单测覆盖，三闸门不受影响）。**dist 未重建**（样式改动在 `side-panel.html`，需完整构建后重载扩展）。
 
 ---
 

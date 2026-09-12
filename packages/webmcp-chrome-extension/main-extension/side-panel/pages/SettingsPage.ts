@@ -19,7 +19,6 @@ export const SettingsPage = defineComponent({
     save: null,
     'export-logs': null,
     'clear-logs': null,
-    'toggle-debug': null,
   },
   setup(props, { emit }) {
     return () =>
@@ -35,7 +34,6 @@ export const SettingsPage = defineComponent({
             onSave: () => emit('save'),
             onExportLogs: () => emit('export-logs'),
             onClearLogs: () => emit('clear-logs'),
-            onToggleDebug: () => emit('toggle-debug'),
           }),
         ]
       );

@@ -5,7 +5,6 @@ import { computed, defineComponent, h, ref, watch, type VNode } from 'vue';
 import { serializeToolResult, type PageToolMeta } from '../../../core/page-tools-bridge';
 import { logEvent } from '../logger';
 import type { PageToolsClient } from '../panel-client';
-import type { RelayStatusClient } from '../relay-status-client';
 import {
   appendRun,
   buildArgsTemplate,
@@ -27,11 +26,6 @@ export const DebugPage = defineComponent({
      * 避免与其他执行流并发造成页面工具调用状态错乱。
      */
     locked: { type: Boolean, default: false },
-    /**
-     * relay 状态客户端（可选）：「webmcp连接刷新 / relay连接刷新」按钮
-     * 借此向 SW 发送重建指令；未注入时按钮隐藏。
-     */
-    relayStatus: { type: Object as () => RelayStatusClient | null, default: null },
   },
   emits: {
     /** 用户点击「发送到对话」，把一次执行记录交给 agent 继续分析。 */
@@ -158,25 +152,6 @@ export const DebugPage = defineComponent({
       emit('handoff', run);
     };
 
-    // ---- 连接刷新（重建连接类操作，均为 fire-and-forget，结果经状态快照展示） ----
-
-    /** 连接刷新进行中标记：重建是异步编排（dispose → reconnect → resync），短暂禁用按钮防连点。 */
-    const reconnecting = ref<'webmcp' | 'relay' | null>(null);
-
-    const recreateConnection = (mode: 'webmcp' | 'relay'): void => {
-      if (!props.relayStatus || reconnecting.value) return;
-      reconnecting.value = mode;
-      logEvent('info', 'debugger', mode === 'webmcp' ? 'webmcp_reconnect' : 'relay_reconnect', {});
-      try {
-        props.relayStatus.sendRequest({ type: mode === 'webmcp' ? 'webmcp-reconnect' : 'relay-reconnect' });
-      } finally {
-        // SW 端重建异步执行：此处仅做按钮节流，状态变化由 RelayStatusBar 展示
-        setTimeout(() => {
-          reconnecting.value = null;
-        }, 1000);
-      }
-    };
-
     // ---- 渲染函数 ----
 
     /** 参数说明面板：列出每个入参的类型 / 必填 / 默认值 / 说明，便于构造合法参数。 */
@@ -286,32 +261,7 @@ export const DebugPage = defineComponent({
           ),
           h('button', { class: 'ghost', type: 'button', disabled: running.value || props.locked, onClick: () => void refreshTools() }, 'tools刷新'),
         ]),
-        // 连接重建区：与「tools刷新」（仅重新拉取清单）不同，以下按钮触发 SW 侧
-        // 真正销毁并重建底层连接 —— webmcp 连接 = SW→页面 Port，relay 连接 = SW→relay WebSocket
-        props.relayStatus
-          ? h('div', { class: 'debug-actions' }, [
-              h(
-                'button',
-                {
-                  class: 'ghost',
-                  type: 'button',
-                  disabled: props.locked || reconnecting.value !== null,
-                  onClick: () => recreateConnection('webmcp'),
-                },
-                reconnecting.value === 'webmcp' ? '重建中…' : 'webmcp连接刷新'
-              ),
-              h(
-                'button',
-                {
-                  class: 'ghost',
-                  type: 'button',
-                  disabled: props.locked || reconnecting.value !== null,
-                  onClick: () => recreateConnection('relay'),
-                },
-                reconnecting.value === 'relay' ? '重建中…' : 'relay连接刷新'
-              ),
-            ])
-          : null,
+        // 连接刷新按钮（webmcp/relay）已迁至「数据源设置」页（2026-09-12 页面结构调整）
       ]);
     };
 

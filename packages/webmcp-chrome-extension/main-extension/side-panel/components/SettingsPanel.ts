@@ -1,5 +1,7 @@
-// 设置面板：LLM 连接配置、调试模式 / 控制台输出开关、本地日志管理区块。
+// 设置面板：LLM 连接配置、控制台输出开关、本地日志管理区块。
 // 状态归属 App（settings reactive 对象直接传入，字段变更就地生效），保存/导出/清空动作回抛给 App。
+// 调试模式开关已移除（2026-09-12 页面结构调整，tools 调试已是独立页签）；
+// debugMode 字段保留（存储兼容 + 「侧栏打开默认进 tools 调试页」行为仍在）。
 import { defineComponent, h, type PropType, type VNode } from 'vue';
 import type { PanelSettings } from '../panel-client';
 
@@ -17,8 +19,6 @@ export const SettingsPanel = defineComponent({
     save: null,
     'export-logs': null,
     'clear-logs': null,
-    /** 快速切换调试模式（立即持久化并生效，不等「保存」）。 */
-    'toggle-debug': null,
   },
   setup(props, { emit }) {
     const textInput = (
@@ -77,7 +77,7 @@ export const SettingsPanel = defineComponent({
         h('p', { class: 'settings-hint' }, '单次回复的最大 token 数（默认 4096；仅 Anthropic 协议使用）。'),
       ]);
 
-    const checkbox = (key: 'debugMode' | 'consoleOutput', text: string): VNode =>
+    const checkbox = (key: 'consoleOutput', text: string): VNode =>
       h('label', { class: 'settings-check' }, [
         h('input', {
           type: 'checkbox',
@@ -149,13 +149,6 @@ export const SettingsPanel = defineComponent({
           step: 1,
           hint: '每轮发送给 LLM 的历史对话轮数上限（默认 5，0 = 不裁剪）。裁剪以轮为单位，工具执行结果随所属轮一并裁剪，可显著降低 token 消耗。',
         }),
-        checkbox('debugMode', '调试模式（侧栏打开时默认进入「tools 调试」页）'),
-        // 快速切换：无 Key 用户的一键直达入口（立即生效，不依赖「保存」按钮）
-        h(
-          'button',
-          { class: 'ghost', type: 'button', onClick: () => emit('toggle-debug') },
-          props.settings.debugMode ? '⚡ 快速关闭调试模式' : '⚡ 快速开启调试模式（无需 API Key，手动执行工具）'
-        ),
         checkbox(
           'consoleOutput',
           '控制台输出（开启后日志同步打印到控制台，带 [traceId] 前缀；默认仅写本地日志）'
