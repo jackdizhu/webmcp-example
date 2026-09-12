@@ -2,6 +2,8 @@
 // 独立组件不感知页面路由语义（分层约定：显隐收敛在页面层）。
 // 日志区块管理（条数/导出/清空）为页面级逻辑，自持状态与 handler（2026-09-12
 // App.ts 页面级归拢：原 App 侧 logCount/hint/export/clear 下沉到本页）。
+// 远程智能体（A2A）已拆出为独立页签 A2aPage（2026-09-12 页面结构调整，与
+// 「数据源设置」独立成页同款动机）：本页回归纯 LLM 连接配置语义。
 // 模板用 h() 渲染函数（MV3 扩展页 CSP 禁止运行时字符串编译，见 issues/001）。
 import { defineComponent, h, ref, watch, type PropType } from 'vue';
 import type { PanelSettings } from '../panel-client';

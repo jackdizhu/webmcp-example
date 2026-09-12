@@ -653,9 +653,12 @@ export function startTabSourceManager(options: TabSourceManagerOptions = {}): {
 
   const recordStatus = (tabId: number, status: RelayConnectionStatus): void => {
     const entry = entries.get(tabId);
+    // 展示元数据优先取条目 meta；条目尚未登记（start() 同步 emit 的早期状态）回落
+    // inventory —— 否则快照缺 title/url，侧栏数据源列表会退化成「标签页 <id>」兜底文案
+    const meta = entry?.meta ?? inventory.get(tabId);
     const next: RelayTabStatus = { ...status, tabId };
-    if (entry?.meta.url !== undefined) next.url = entry.meta.url;
-    if (entry?.meta.title !== undefined) next.title = entry.meta.title;
+    if (meta?.url !== undefined) next.url = meta.url;
+    if (meta?.title !== undefined) next.title = meta.title;
     statuses.set(tabId, next);
     emitStatuses();
   };
@@ -890,7 +893,8 @@ export function startTabSourceManager(options: TabSourceManagerOptions = {}): {
     if (title !== undefined) meta.title = title;
     const client = clientFactory({ tabId, source, facade });
     client.onStatus((status) => recordStatus(tabId, status));
-    client.start();
+    // 先登记条目再 start()：start 会同步 emit 'connecting' 状态，recordStatus 依赖
+    // 条目 meta 补 title/url —— 顺序颠倒会让快照缺标题（侧栏显示「标签页 <id>」）
     entries.set(tabId, {
       client,
       disposePort: disconnect,
@@ -900,6 +904,7 @@ export function startTabSourceManager(options: TabSourceManagerOptions = {}): {
       },
       isPortDead: () => portDead,
     });
+    client.start();
   }
 
   const onUpdated = (

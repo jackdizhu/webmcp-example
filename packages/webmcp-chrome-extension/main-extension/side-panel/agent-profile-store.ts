@@ -9,6 +9,7 @@ import {
   getActiveAgent,
   migrateLegacySettings,
   validateAgentProfilesState,
+  type AgentA2aRef,
   type AgentProfile,
   type ProfileStore,
 } from 'webmcp-agent-chat-core';
@@ -62,6 +63,13 @@ export interface AgentProfileStore {
   load(legacySystemPrompt: string): Promise<void>;
   /** 切换激活智能体（更新响应式状态并持久化）。 */
   setActive(id: string): Promise<void>;
+  /**
+   * 更新指定智能体的 A2A 远程智能体引用并持久化（A2A 页专用；id 不可变语义
+   * 由调用方保证 —— 本方法整表替换该智能体的 a2aAgents）。
+   * 目标智能体不存在时抛错（2026-09-13 修订：此前「只写激活智能体 + 静默忽略」
+   * 会造成编辑目标漂移时操作静默丢失，被误认为数据未持久化）。
+   */
+  updateAgentA2aAgents(agentId: string, refs: AgentA2aRef[]): Promise<void>;
 }
 
 export function createAgentProfileStore(
@@ -89,6 +97,15 @@ export function createAgentProfileStore(
     async setActive(id) {
       activeAgentId.value = id;
       await backend.save({ agents: agents.value, activeAgentId: id });
+    },
+    async updateAgentA2aAgents(agentId, refs) {
+      if (!agents.value.some((agent) => agent.id === agentId)) {
+        throw new Error(`目标智能体不存在：${agentId}`);
+      }
+      agents.value = agents.value.map((agent) =>
+        agent.id === agentId ? { ...agent, a2aAgents: refs } : agent
+      );
+      await backend.save({ agents: agents.value, activeAgentId: activeAgentId.value });
     },
   };
 }

@@ -27,6 +27,26 @@ export interface AgentSkillRef {
   enabled: boolean;
 }
 
+/**
+ * agent 绑定的远程智能体引用（A2A，设计 docs/webmcp-a2a-agent-protocol-design.md §5 D5）。
+ *
+ * 决策（2026-09-12）：id（agentKey）一经创建不可变、仅 cardUrl 可改 —— 工具名
+ * `a2a__<id>__send_task` 随 id 稳定，不随 URL 漂移。id 语义约束见 a2a-tool-source
+ * 的 validateA2aAgentId（仅 [a-zA-Z0-9_-]）。每 agent 的 bearer token 不入 profile
+ * （对齐「apiKey 不允许覆写」的安全立场），由宿主 settings 持有。
+ */
+export interface AgentA2aRef {
+  id: string;
+  cardUrl: string;
+  enabled: boolean;
+  /**
+   * JSON-RPC 端点覆盖（可选）：message/send 与 tasks/get 的 POST 地址。
+   * 缺省用卡片 supportedInterfaces[0].url；Dify 等实现的卡片顶层 url 指向聊天页
+   * 而非 A2A 端点时，需显式覆盖（如 http://host/e/<app>/a2a）。
+   */
+  endpointOverride?: string;
+}
+
 /** per-agent LLM 配置覆写（缺省字段回落全局 settings；apiKey 不允许覆写）。 */
 export interface AgentLlmOverride {
   baseUrl?: string;
@@ -36,7 +56,7 @@ export interface AgentLlmOverride {
   maxTokens?: number;
 }
 
-/** 智能体档案（数据模型见探索文档 §4，mcps 为预留占位）。 */
+/** 智能体档案（数据模型见探索文档 §4；mcps 为预留占位，a2aAgents 为 A2A 远程智能体引用）。 */
 export interface AgentProfile {
   id: string;
   name: string;
@@ -45,6 +65,8 @@ export interface AgentProfile {
   skills: AgentSkillRef[];
   /** mcps 预留占位（本期不实现，schema 先占位避免未来迁移）。 */
   mcps: unknown[];
+  /** A2A 远程智能体引用（enabled 者经 a2a-tool-source 暴露为 a2a__<id>__send_task 工具）。 */
+  a2aAgents: AgentA2aRef[];
   llmOverride?: AgentLlmOverride;
 }
 
@@ -75,7 +97,8 @@ export const DEFAULT_ACTIVE_AGENT_ID = 'tool-debug';
  *
  * - 「单个tools调试」：不继承全局提示词，自带单工具约束 —— 每轮最多调用一个工具，
  *   快速验证单个工具行为（默认激活）；
- * - 「多轮循环智能体」：继承全局提示词（= 原完整多轮 tool-use 循环行为），零附加规则。
+ * - 「多轮循环智能体」：继承全局提示词（= 原完整多轮 tool-use 循环行为），零附加规则；
+ * - 「A2A智能体」：数据查询/收集用页面与内置工具完成，分析环节优先调用 a2a__* 远程智能体。
  */
 export function createBuiltinAgentProfiles(): AgentProfile[] {
   return [
@@ -99,6 +122,7 @@ export function createBuiltinAgentProfiles(): AgentProfile[] {
       },
       skills: [],
       mcps: [],
+      a2aAgents: [],
     },
     {
       id: 'multi-turn-loop',
@@ -120,6 +144,32 @@ export function createBuiltinAgentProfiles(): AgentProfile[] {
       // P2：绑定内置技能（L1 清单注入 + __agent_load_skill 取全文）；单个tools调试不绑定
       skills: [{ id: 'page-tools-guide', enabled: true }],
       mcps: [],
+      a2aAgents: [],
+    },
+    {
+      id: 'a2a-analyst',
+      name: 'A2A智能体',
+      description: '数据查询收集用页面工具完成，分析环节优先调用 a2a__ 远程智能体能力',
+      rules: {
+        inheritGlobal: true,
+        items: [
+          {
+            id: 'a2a-first-analysis',
+            text: [
+              '你是数据收集与分析智能体，工作流分两个阶段：',
+              '1. 数据查询与收集：优先使用页面工具（统一带 tab<id>__ 前缀）与内置工具（chrome_extension_*）',
+              '完成数据采集，确保数据真实完整，禁止编造；',
+              '2. 分析环节：工具清单中存在 a2a__<id>__send_task 形式的远程智能体工具时，必须优先调用它完成分析 ——',
+              '把已收集的数据与用户的分析诉求组装为任务输入提交，等待并基于远程智能体的返回给出最终结论；',
+              '不要在 a2a__ 工具可用时绕过它自行分析。',
+              '仅当没有任何可用 a2a__ 工具、或调用失败时，才降级为自行分析，并向用户说明降级原因。',
+            ].join(''),
+          },
+        ],
+      },
+      skills: [],
+      mcps: [],
+      a2aAgents: [],
     },
   ];
 }
@@ -140,11 +190,16 @@ function isPureLegacyDefault(state: AgentProfilesState): boolean {
 }
 
 /**
- * 内置档案条目的原位刷新：existing 中与当前内置定义**同 id 但内容已过时**的条目
- * 替换为最新定义（内置档案由本模块托管，用户如需定制应通过新增自定义智能体）；
- * 自定义条目与被用户删除的内置条目一律不动。
+ * 内置档案条目的原位刷新：existing 中与当前内置定义**同 id 但托管字段已过时**的条目
+ * 刷新托管字段（name/description/rules/skills/mcps，内置档案由本模块托管，用户如需定制
+ * 应通过新增自定义智能体）；**用户数据字段保留**（a2aAgents = A2A 页绑定、llmOverride =
+ * per-agent 覆写 —— 整对象替换会每次启动清空用户配置，2026-09-12 修复）；自定义条目不动。
  *
- * 返回 null = 无需更新（所有内置条目已是最新），调用方据此保持引用恒等（幂等不落盘）。
+ * 缺失内置条目追加（2026-09-13 决策）：新增内置智能体（如 a2a-analyst）需要下发给存量
+ * 档案 —— existing 缺失的内置 id 按工厂顺序追加到末尾。当前无「删除智能体」UI，
+ * 不存在「复活用户已删除条目」的冲突；引入删除能力时需配套墓碑记录。
+ *
+ * 返回 null = 无需更新（托管字段已最新且无缺失条目），调用方据此保持引用恒等（幂等不落盘）。
  * 深比较用 JSON 序列化：两侧均出自同一工厂的同构字段序，序列化稳定。
  */
 function refreshBuiltinEntries(existing: AgentProfilesState): AgentProfilesState | null {
@@ -153,13 +208,30 @@ function refreshBuiltinEntries(existing: AgentProfilesState): AgentProfilesState
   const nextAgents = existing.agents.map((agent) => {
     const builtin = builtins.find((item) => item.id === agent.id);
     if (!builtin) return agent;
-    if (JSON.stringify(agent) === JSON.stringify(builtin)) return agent;
+    const managedEqual =
+      agent.name === builtin.name &&
+      agent.description === builtin.description &&
+      JSON.stringify(agent.rules) === JSON.stringify(builtin.rules) &&
+      JSON.stringify(agent.skills) === JSON.stringify(builtin.skills) &&
+      JSON.stringify(agent.mcps) === JSON.stringify(builtin.mcps);
+    if (managedEqual) return agent;
     changed = true;
-    return builtin;
+    return {
+      ...builtin,
+      a2aAgents: agent.a2aAgents,
+      ...(agent.llmOverride !== undefined ? { llmOverride: agent.llmOverride } : {}),
+    };
   });
+  for (const builtin of builtins) {
+    if (!nextAgents.some((agent) => agent.id === builtin.id)) {
+      nextAgents.push({ ...builtin });
+      changed = true;
+    }
+  }
   if (!changed) return null;
-  const activeValid = nextAgents.some((agent) => agent.id === existing.activeAgentId);
-  return { agents: nextAgents, activeAgentId: activeValid ? existing.activeAgentId : DEFAULT_ACTIVE_AGENT_ID };
+  // activeAgentId 原样保留：未命中时由 getActiveAgent 在读取时回落第一个（不在此重置默认，
+  // 否则自定义档案的「回落第一个」语义会被改写成固定回落 tool-debug）
+  return { agents: nextAgents, activeAgentId: existing.activeAgentId };
 }
 
 /**
@@ -206,6 +278,23 @@ export function validateAgentProfilesState(value: unknown): AgentProfilesState {
       }
     }
     if (!Array.isArray(a['mcps'])) fail(`agent(${a['id']}).mcps is not an array`);
+    if (!Array.isArray(a['a2aAgents'])) fail(`agent(${a['id']}).a2aAgents is not an array`);
+    for (const ref of a['a2aAgents'] as unknown[]) {
+      const r = ref as Record<string, unknown>;
+      if (
+        typeof r !== 'object' ||
+        r === null ||
+        typeof r['id'] !== 'string' ||
+        r['id'].length === 0 ||
+        typeof r['cardUrl'] !== 'string' ||
+        r['cardUrl'].length === 0 ||
+        typeof r['enabled'] !== 'boolean' ||
+        (r['endpointOverride'] !== undefined &&
+          (typeof r['endpointOverride'] !== 'string' || (r['endpointOverride'] as string).length === 0))
+      ) {
+        fail(`agent(${a['id']}).a2aAgents has an invalid entry`);
+      }
+    }
     if (a['llmOverride'] !== undefined && (typeof a['llmOverride'] !== 'object' || a['llmOverride'] === null)) {
       fail(`agent(${a['id']}).llmOverride is not an object`);
     }
@@ -281,12 +370,13 @@ export function mergeLlmConfig(base: LlmConfig, override?: AgentLlmOverride): Ll
 }
 
 /**
- * 旧版单一 systemPrompt 的幂等迁移（v5.2：内置双智能体 + rules 补充）：
+ * 旧版单一 systemPrompt 的幂等迁移（v5.3：内置三智能体，新增 A2A智能体）：
  * - existing 已含智能体：
- *   - 旧版迁移的「未定制默认智能体」（仅一个 id=default 空规则）→ 升级为内置双智能体；
+ *   - 旧版迁移的「未定制默认智能体」（仅一个 id=default 空规则）→ 升级为内置智能体全集；
  *   - 内置条目过时（如多轮循环智能体缺 rules）→ 原位刷新为最新定义（自定义条目不动）；
- *   - 其余情况原样返回（幂等保证：不覆盖用户定制数据、不复活用户删除的内置条目）；
- * - existing 为空 → 创建内置双智能体。
+ *   - 缺失的内置条目（如存量档案缺新增的 a2a-analyst）→ 追加下发；
+ *   - 其余情况原样返回（幂等保证：不覆盖用户定制数据）；
+ * - existing 为空 → 创建内置智能体全集。
  * 存量 systemPrompt 始终保留在 settings.systemPrompt（全局 rules 语义）。
  */
 export function migrateLegacySettings(

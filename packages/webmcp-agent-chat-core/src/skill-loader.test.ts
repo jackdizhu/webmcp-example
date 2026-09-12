@@ -188,6 +188,7 @@ describe('composeSystemPrompt skills 段（P2 扩展）', () => {
     rules: { inheritGlobal: true, items: [{ id: 'r1', text: '完整循环。' }] },
     skills: [],
     mcps: [],
+    a2aAgents: [],
   };
 
   it('skillSection 非空时追加 [skills] 段（位于 rules 段之后）', () => {

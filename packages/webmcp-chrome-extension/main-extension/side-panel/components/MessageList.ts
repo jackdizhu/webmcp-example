@@ -17,17 +17,23 @@ const TraceItem = defineComponent({
     };
     return () => {
       const pending = props.trace.result === TOOL_PENDING_TEXT;
-      const isSkill = props.trace.kind === 'skill';
+      // 展示类别：tool（缺省）/ skill / a2a —— 后两者有专属徽标文案、配色与展示名
+      const kind = props.trace.kind ?? 'tool';
       return h(
         'div',
-        { class: ['tool', props.trace.failed ? 'tool-failed' : '', isSkill ? 'tool-skill' : ''] },
+        { class: ['tool', props.trace.failed ? 'tool-failed' : '', kind !== 'tool' ? `tool-${kind}` : ''] },
         [
           h(
             'div',
             { class: 'tool-head', style: { cursor: pending ? 'default' : 'pointer' }, onClick: toggle },
             [
-              h('span', { class: ['tool-badge', isSkill ? 'tool-badge-skill' : ''] }, isSkill ? 'SKILL' : 'TOOL'),
-              // SKILL 行展示技能 id（label 由 App 经 callTool 缝捕获回填），普通工具行展示工具名
+              h(
+                'span',
+                { class: ['tool-badge', kind !== 'tool' ? `tool-badge-${kind}` : ''] },
+                kind === 'tool' ? 'TOOL' : kind.toUpperCase()
+              ),
+              // SKILL 行展示技能 id、A2A 行展示远端智能体 id（label 由 App 回填），
+              // 普通工具行展示工具名
               h('span', { class: 'tool-name' }, props.trace.label ?? props.trace.name),
               h('span', { class: 'tool-toggle' }, pending ? '执行中…' : expanded.value ? '收起 ▲' : '展开 ▼'),
             ]

@@ -4,7 +4,7 @@
 // 终止）、执行锁（agent 对话或 relay 调用进行中禁止切换页面）、traceId 与日志埋点、
 // 生命周期（Port 桥接连断）。渲染全部下沉到 components/ 与 pages/（h() 渲染函数，
 // MV3 扩展页 CSP 禁止运行时字符串编译，见 issues/001）。
-import { computed, defineComponent, h, onMounted, onUnmounted, reactive, ref } from 'vue';
+import { computed, defineComponent, h, onMounted, onUnmounted, reactive, ref, watch } from 'vue';
 import {
   API_PATH_EMPTY_HINT,
   buildSkillL1Section,
@@ -17,9 +17,11 @@ import {
   SKILL_TOOL_NAME,
   toSkillToolError,
   toSkillToolResult,
+  type AgentA2aRef,
   type AgentLoopEvent,
   type SkillSummary,
 } from 'webmcp-agent-chat-core';
+import { createA2aToolHost, loadA2aTokens, saveA2aTokens } from './a2a-host';
 import { createAgentProfileStore } from './agent-profile-store';
 import { createHostSkillSource, getBuiltinSkillSummary } from './skill-assets';
 import { composeHandoffMessage, type DebugRun } from './debugger-core';
@@ -35,6 +37,7 @@ import {
 } from './trace-context';
 import {
   attachBuiltinTools,
+  attachInjectedTools,
   connectPageTools,
   loadSettings,
   saveSettings,
@@ -50,6 +53,7 @@ import { TabBar, type PanelPage } from './components/TabBar';
 import { TOOL_PENDING_TEXT, type UiMessage } from './components/types';
 import { ChatPage } from './pages/ChatPage';
 import { DataSourcePage } from './pages/DataSourcePage';
+import { A2aPage } from './pages/A2aPage';
 import { DebugPage } from './pages/DebugPage';
 import { RelayPage } from './pages/RelayPage';
 import { SettingsPage } from './pages/SettingsPage';
@@ -96,11 +100,87 @@ export const App = defineComponent({
     // ---- 技能渐进加载（P2，D5/C8：解析编排与结果包装在 core，宿主只提供读取实现与缝注入）----
     const skillResolver = createSkillResolver(createHostSkillSource());
     const skillToolDefinition = createSkillToolDefinition();
+
+    // ---- A2A 远程智能体（P0）：token 响应式快照 + 工具源托管（领域逻辑在 core）----
+    /** agentId → bearer token（onMounted 从 a2aTokens 存储加载；设置页编辑经 handleSaveA2aToken 落盘）。 */
+    const a2aTokens = reactive<Record<string, string>>({});
+    const a2aHost = createA2aToolHost({
+      onLog: (level, event, payload) => logEvent(level, 'chat', event, payload),
+    });
+    /** A2A 页全局提示（持久化失败 / 同步失败等反馈；6 秒自动清除，重复触发重置计时）。 */
+    const a2aNotice = ref<{ kind: 'error' | 'ok'; text: string } | null>(null);
+    let a2aNoticeTimer: ReturnType<typeof setTimeout> | null = null;
+    const notifyA2a = (kind: 'error' | 'ok', text: string): void => {
+      a2aNotice.value = { kind, text };
+      if (a2aNoticeTimer !== null) clearTimeout(a2aNoticeTimer);
+      a2aNoticeTimer = setTimeout(() => {
+        a2aNotice.value = null;
+        a2aNoticeTimer = null;
+      }, 6000);
+    };
+    // 激活智能体变化（load 完成加载 / 切换智能体 / 设置页编辑 a2aAgents）即重建 A2A 工具清单；
+    // 同步失败（卡片抓取/配置校验）此前完全静默 —— 对话侧「没有 a2a 工具」时无从排查，现提示到 A2A 页
+    watch(profileStore.activeAgent, (agent) => {
+      void a2aHost.sync(agent).then((failures) => {
+        if (failures.length > 0) {
+          notifyA2a('error', `以下远程智能体的卡片抓取失败，对话中将不可用：${failures.join('、')}`);
+        }
+      });
+    });
+    /**
+     * A2A 页编辑目标智能体（2026-09-13 修复「A2A 数据未持久化」体感问题）：
+     * 绑定关系 per-agent 分别持久化，但页面此前只读写「当前激活智能体」——
+     * 切换智能体后列表立即变空（数据其实在另一个 agent 的 profile 里），
+     * 且编辑期间激活变化会让操作漂移到错误目标。现改为显式选择编辑目标，
+     * 默认跟随激活智能体，可手动切换查看/编辑任意智能体的绑定。
+     */
+    const a2aTargetAgentId = ref('');
+    watch(
+      () => profileStore.activeAgentId.value,
+      (id) => {
+        a2aTargetAgentId.value = id;
+      },
+      { immediate: true }
+    );
+    /** A2A 页：整表替换目标智能体的 a2aAgents（profileStore 落盘，watch 驱动 sync）。 */
+    const handleUpdateA2aAgents = async (agentId: string, refs: AgentA2aRef[]): Promise<void> => {
+      try {
+        await profileStore.updateAgentA2aAgents(agentId, refs);
+        logEvent('info', 'chat', 'a2a_agents_updated', { agentId, count: refs.length });
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        notifyA2a('error', `A2A 配置保存失败：${message}`);
+        logEvent('error', 'chat', 'a2a_agents_update_failed', { message });
+      }
+    };
+    /** 设置页 A2A 区块：保存单条 token 并即时重同步（token 影响卡片抓取鉴权）。 */
+    const handleSaveA2aToken = async (agentId: string, token: string): Promise<void> => {
+      a2aTokens[agentId] = token;
+      try {
+        await saveA2aTokens({ ...a2aTokens });
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        notifyA2a('error', `「${agentId}」的 Bearer Token 保存失败：${message}`);
+        logEvent('error', 'chat', 'a2a_token_save_failed', { message });
+      }
+      void a2aHost.sync(profileStore.activeAgent.value);
+    };
+    /** 设置页连通测试：委托 a2a-host 直连卡片（不进工具清单）。 */
+    const handleTestA2aConnection = (cardUrl: string, token?: string): Promise<string> =>
+      a2aHost.testConnection(cardUrl, token);
     /**
      * 最近一次 SKILL 调用的技能 id（SKILL 行展示用：技能 id 才是 SKILL 唯一标识，工具名只是加载器）。
      * 循环内工具串行执行，callTool 捕获 → applyEvent(result/error) 回填，时序安全。
      */
     let lastSkillLabel: string | null = null;
+    /**
+     * a2a__<id>__send_task → 远端智能体 id（A2A 行展示用）。
+     * 工具名本身携带 id，无需经 callTool 缝捕获，可同步提取。
+     */
+    const a2aAgentIdFromToolName = (name: string): string | null => {
+      if (!a2aHost.handles(name)) return null;
+      return name.slice('a2a__'.length, name.length - '__send_task'.length);
+    };
     /** 激活智能体已启用技能的摘要（L1 清单数据源 = 内置 assets；storage 覆写只影响 L2 全文内容）。 */
     const enabledSkillSummaries = (): SkillSummary[] =>
       (profileStore.activeAgent.value?.skills ?? [])
@@ -151,23 +231,26 @@ export const App = defineComponent({
     };
 
     /**
-     * 把过程事件回填到助手消息的工具痕迹里（skill 类别单独标注，UI 徽标区分；
-     * SKILL 行展示名回填为技能 id —— tool_start 事件无 args，id 由 callTool 缝在执行时捕获）。
+     * 把过程事件回填到助手消息的工具痕迹里（skill / a2a 类别单独标注，UI 徽标区分；
+     * SKILL 行展示名回填为技能 id，A2A 行展示名回填为远端智能体 id）。
      */
     const applyEvent = (target: UiMessage, event: AgentLoopEvent): void => {
       if (event.type === 'tool_start') {
         const isSkill = event.name === SKILL_TOOL_NAME;
+        const a2aAgentId = a2aAgentIdFromToolName(event.name);
         target.toolTrace.push({
           name: event.name,
           result: TOOL_PENDING_TEXT,
           failed: false,
           ...(isSkill ? { kind: 'skill' as const } : {}),
+          ...(a2aAgentId !== null ? { kind: 'a2a' as const, label: a2aAgentId } : {}),
         });
         logEvent('info', 'tools', 'tool_start', { name: event.name });
         return;
       }
       if (event.type === 'tool_result' || event.type === 'tool_error') {
         const isSkill = event.name === SKILL_TOOL_NAME;
+        const a2aAgentId = a2aAgentIdFromToolName(event.name);
         const capturedLabel = isSkill && lastSkillLabel !== null ? lastSkillLabel : null;
         const pending = [...target.toolTrace].reverse().find(
           (item) => item.name === event.name && item.result === TOOL_PENDING_TEXT
@@ -182,7 +265,7 @@ export const App = defineComponent({
               result: event.result,
               failed: false,
               ...(isSkill ? { kind: 'skill' as const } : {}),
-              ...(capturedLabel !== null ? { label: capturedLabel } : {}),
+              ...(a2aAgentId !== null ? { kind: 'a2a' as const, label: a2aAgentId } : {}),
             });
           }
           logEvent('info', 'tools', 'tool_result', { name: event.name, result: event.result });
@@ -197,7 +280,7 @@ export const App = defineComponent({
               result: event.error,
               failed: true,
               ...(isSkill ? { kind: 'skill' as const } : {}),
-              ...(capturedLabel !== null ? { label: capturedLabel } : {}),
+              ...(a2aAgentId !== null ? { kind: 'a2a' as const, label: a2aAgentId } : {}),
             });
           }
           logEvent('error', 'tools', 'tool_error', { name: event.name, error: event.error });
@@ -211,26 +294,15 @@ export const App = defineComponent({
     const chatController = createChatController({
       getTools: async () => {
         // 每轮发送前刷新工具清单，保证页面工具变化（listChanged）能被感知；
-        // 清单含内置工具（chrome_extension_*，由 attachBuiltinTools 合成）
+        // 清单 = 页面工具 + 内置工具（attachBuiltinTools）+ 注入工具（attachInjectedTools：
+        // __agent_load_skill / a2a__*，与调试页同源）
         const tools = await pageTools!.listTools();
-        // P2：激活智能体启用了技能时追加 __agent_load_skill（D6 注入点；调试页/relay 的 pageTools 不受影响）
-        const appendSkillTool =
-          enabledSkillSummaries().length > 0 && !tools.some((tool) => tool.name === SKILL_TOOL_NAME);
-        toolsCount.value = tools.length + (appendSkillTool ? 1 : 0);
-        return appendSkillTool ? [...tools, skillToolDefinition] : tools;
+        toolsCount.value = tools.length;
+        return tools;
       },
       callTool: async (name, args) => {
-        // P2：__agent_load_skill 经宿主缝本地路由（core 解析编排 + 结果包装），其余透传页面工具
-        if (name === SKILL_TOOL_NAME) {
-          try {
-            const skillId = parseSkillToolArgs(args);
-            lastSkillLabel = skillId;
-            return toSkillToolResult(await skillResolver.resolve(skillId));
-          } catch (error) {
-            lastSkillLabel = null;
-            return toSkillToolError(error instanceof Error ? error.message : String(error));
-          }
-        }
+        // 注入工具（skill / a2a）由 attachInjectedTools 层路由（与调试页同一路径），
+        // 其余透传页面工具
         return pageTools!.callTool(name, args);
       },
       // per-agent LLM 覆写（P1）：全局 settings 为 base，激活智能体的 llmOverride 合并其上（领域逻辑在 core）
@@ -384,10 +456,37 @@ export const App = defineComponent({
       // （D5/C8：迁移与校验逻辑在 core，这里只是调用 + 持久化适配）
       await profileStore.load(settings.systemPrompt);
 
-      // 页面工具客户端 + 内置工具合成：agent 对话与 tools 调试页共用同一实例，
+      // A2A token 快照加载（watch(profileStore.activeAgent) 会在 load 后自动首次 sync）
+      const tokens = await loadA2aTokens();
+      for (const [key, token] of Object.entries(tokens)) {
+        a2aTokens[key] = token;
+      }
+
+      // 页面工具客户端 + 内置工具合成 + 注入工具层（a2a__* / __agent_load_skill）：
+      // agent 对话与 tools 调试页共用同一实例（注入层与对话缝同源，调试页可直调注入工具），
       // 内置工具的「当前选中页签」直接取 relayStore 的全局选择快照
-      pageTools = attachBuiltinTools(connectPageTools(), {
+      pageTools = attachInjectedTools(attachBuiltinTools(connectPageTools(), {
         getSelectedTabIds: () => relayStore.selection.value.tabIds,
+      }), {
+        // 清单 = 技能加载工具（激活智能体启用技能时）+ A2A 工具（随 a2aHost.sync 维护）
+        listInjected: () => [
+          ...(enabledSkillSummaries().length > 0 ? [skillToolDefinition] : []),
+          ...a2aHost.listTools(),
+        ],
+        handles: (name) => name === SKILL_TOOL_NAME || a2aHost.handles(name),
+        callInjected: async (name, args) => {
+          if (name === SKILL_TOOL_NAME) {
+            try {
+              const skillId = parseSkillToolArgs(args);
+              lastSkillLabel = skillId;
+              return toSkillToolResult(await skillResolver.resolve(skillId));
+            } catch (error) {
+              lastSkillLabel = null;
+              return toSkillToolError(error instanceof Error ? error.message : String(error));
+            }
+          }
+          return a2aHost.callTool(name, args);
+        },
       });
       pageToolsRef.value = pageTools;
       unsubscribeStatus = pageTools.onStatusChange((value) => {
@@ -490,6 +589,26 @@ export const App = defineComponent({
           selection: relayStore.selection.value,
           locked: locked.value,
           relayStatus: relayStatusClient,
+        }),
+        h(A2aPage, {
+          active: activeTab.value === 'a2a',
+          agents: profileStore.agents.value.map((item) => ({
+            id: item.id,
+            name: item.name,
+            a2aAgents: item.a2aAgents,
+          })),
+          activeAgentId: profileStore.activeAgentId.value,
+          targetAgentId: a2aTargetAgentId.value,
+          a2aTokens: { ...a2aTokens },
+          busy: locked.value,
+          testConnection: handleTestA2aConnection,
+          notice: a2aNotice.value,
+          'onUpdate:targetAgentId': (id: string) => {
+            a2aTargetAgentId.value = id;
+          },
+          'onUpdate:a2aAgents': (refs: AgentA2aRef[]) =>
+            void handleUpdateA2aAgents(a2aTargetAgentId.value, refs),
+          'onSave:token': (agentId: string, token: string) => void handleSaveA2aToken(agentId, token),
         }),
         h(SettingsPage, {
           active: activeTab.value === 'settings',

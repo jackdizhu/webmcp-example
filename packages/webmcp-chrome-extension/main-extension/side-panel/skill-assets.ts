@@ -20,7 +20,7 @@ export const BUILTIN_SKILLS: readonly SkillDefinition[] = [
       '# 页面工具使用指南',
       '',
       '## 工具全景',
-      '- 页面工具：由目标页签通过 WebMCP 注册（跨页签同名工具带 `tab<id>__` 前缀），',
+      '- 页面工具：由目标页签通过 WebMCP 注册，统一带 `tab<id>__` 前缀（`<id>` 为数据源页签的 tabId，单/多页签一致），',
       '  能力随页面动态变化，每轮对话前工具清单会自动刷新。',
       '- 内置工具 `chrome_extension_get_document_info`：采集当前选中页签的文档信息，',
       '  三个参数：`includeOutline`（元素结构大纲，`<深度> <选择器> [文本]` 逐行）、',

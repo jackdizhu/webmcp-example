@@ -114,7 +114,13 @@ export function startPageToolsBridge(client: Client | Promise<Client>): PageTool
     const request = message as unknown as PageToolsRequest;
 
     const respond = (response: PageToolsResponse): void => {
-      port.postMessage(response);
+      try {
+        port.postMessage(response);
+      } catch {
+        // 端口已断开（侧栏关闭/页面导航先于异步响应到达）时 postMessage 抛
+        // "Attempting to use a disconnected port object"，成为扩展错误面板的未捕获异常。
+        // 对齐 SW 侧（tab-source-manager / relay-status send）的防护口径：静默丢弃。
+      }
     };
 
     if (request.type === 'listTools') {

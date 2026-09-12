@@ -1,6 +1,6 @@
-// panel-client 单测（2026-09-12 多页签编排改造）：
+// panel-client 单测（2026-09-12 多页签编排改造；2026-09-13 统一 tab<id>__ 前缀命名空间）：
 // 连接目标 = setTargetTabs 下发的全局选中页签集合；每页签一条 Port；
-// listTools 合并 + 同名工具 tab<id>__ 前缀去歧义；callTool 按路由表投递；
+// listTools 合并 + 页面工具统一 tab<id>__ 前缀（单/多页签一致）；callTool 按路由表投递原始名；
 // 断线重连按页签独立进行（不再监听 onActivated 自动跟随）；
 // attachBuiltinTools 叠加内置工具（chrome_extension_*，agent 与调试页共用）。
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -147,15 +147,15 @@ describe('connectPageTools 多页签编排', () => {
     // 建连是异步的：首条 listTools 响应到达后聚合在线
     await vi.advanceTimersByTimeAsync(0);
     await expect(client.listTools()).resolves.toEqual([
-      { name: 'tool_1', description: 'd1', inputSchema: { type: 'object' } },
+      { name: 'tab1__tool_1', description: 'd1', inputSchema: { type: 'object' } },
     ]);
     expect(statuses.at(-1)).toBe(true);
 
     // 追加第二个页签：清单合并
     client.setTargetTabs([1, 2]);
     await expect(client.listTools()).resolves.toEqual([
-      { name: 'tool_1', description: 'd1', inputSchema: { type: 'object' } },
-      { name: 'tool_2', description: 'd2', inputSchema: { type: 'object' } },
+      { name: 'tab1__tool_1', description: 'd1', inputSchema: { type: 'object' } },
+      { name: 'tab2__tool_2', description: 'd2', inputSchema: { type: 'object' } },
     ]);
     expect(ports.get(1)?.posted.length).toBeGreaterThan(0);
     expect(ports.get(2)?.posted.length).toBeGreaterThan(0);
@@ -197,7 +197,7 @@ describe('connectPageTools 多页签编排', () => {
     client.disconnect();
   });
 
-  it('唯一工具名跨页签不加前缀，callTool 路由到持有页签', async () => {
+  it('单页签工具也统一加 tab<id>__ 前缀，callTool 按路由投递原始名', async () => {
     const calls: Array<{ tabId: number; name: string }> = [];
     const client = connectPageTools((tabId) =>
       asPort(
@@ -219,9 +219,12 @@ describe('connectPageTools 多页签编排', () => {
 
     client.setTargetTabs([1, 2]);
     await vi.advanceTimersByTimeAsync(0);
-    await client.listTools();
+    await expect(client.listTools()).resolves.toEqual([
+      { name: 'tab1__only_1', description: 'd', inputSchema: { type: 'object' } },
+      { name: 'tab2__only_2', description: 'd', inputSchema: { type: 'object' } },
+    ]);
 
-    await client.callTool('only_2', {});
+    await client.callTool('tab2__only_2', {});
     expect(calls).toEqual([{ tabId: 2, name: 'only_2' }]);
     client.disconnect();
   });
@@ -250,8 +253,8 @@ describe('connectPageTools 多页签编排', () => {
     client.setTargetTabs([2]);
     expect(ports.get(1)?.posted).toBeDefined();
     // 移除后路由表中 tab1 的工具消失
-    await expect(client.callTool('tool_1', {})).rejects.toThrow('未知工具');
-    await expect(client.callTool('tool_2', {})).resolves.toBeDefined();
+    await expect(client.callTool('tab1__tool_1', {})).rejects.toThrow('未知工具');
+    await expect(client.callTool('tab2__tool_2', {})).resolves.toBeDefined();
     client.disconnect();
   });
 
@@ -276,7 +279,7 @@ describe('connectPageTools 多页签编排', () => {
     await vi.advanceTimersByTimeAsync(0);
     // 页签 1 离线，页签 2 正常 → 合并结果仍可用
     await expect(client.listTools()).resolves.toEqual([
-      { name: 'tool_2', description: 'd', inputSchema: {} },
+      { name: 'tab2__tool_2', description: 'd', inputSchema: {} },
     ]);
     client.disconnect();
   });

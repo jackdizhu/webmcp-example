@@ -6,8 +6,8 @@
 // 第一个活动页签，改连需手动切换）。
 //
 // 多选全端生效（Q2 决策）：
-// - listTools 合并全部选中页签的工具清单；同名工具跨页签冲突时，所有冲突实例统一
-//   加 `tab<id>__` 前缀去歧义（暴露名 → 页签路由表）；
+// - listTools 合并全部选中页签的工具清单；页面工具**统一**加 `tab<id>__` 前缀命名空间
+//   （2026-09-13 决策：单页签/多页签一致，不再只对同名冲突去歧义 —— 暴露名 → 页签路由表）；
 // - callTool 经路由表投递到对应页签的 Port；
 // - 断线重连按页签独立进行（指数退避 1s→15s），重连目标 = 各自 tabId（不重查活动页签）。
 import {
@@ -25,7 +25,7 @@ import {
 import { DEFAULT_SYSTEM_PROMPT } from 'webmcp-agent-chat-core';
 
 export interface PageToolsClient {
-  /** 获取全部选中页签暴露的工具清单（合并 + 同名去歧义，见模块头注释）。 */
+  /** 获取全部选中页签暴露的工具清单（合并 + 统一 tab<id>__ 前缀命名空间，见模块头注释）。 */
   listTools(): Promise<PageToolMeta[]>;
   /** 调用某个工具（按路由表投递到对应页签）。 */
   callTool(name: string, args: Record<string, unknown>): Promise<unknown>;
@@ -61,6 +61,48 @@ export function attachBuiltinTools(
       return isBuiltinTool(name)
         ? executeBuiltinTool(name, args, context)
         : pageTools.callTool(name, args);
+    },
+    setTargetTabs(tabIds) {
+      pageTools.setTargetTabs(tabIds);
+    },
+    onStatusChange(listener) {
+      return pageTools.onStatusChange(listener);
+    },
+    onToolsChange(listener) {
+      return pageTools.onToolsChange(listener);
+    },
+    disconnect() {
+      pageTools.disconnect();
+    },
+  };
+}
+
+/**
+ * 给页面工具客户端再叠加「注入工具」层（a2a__* / __agent_load_skill 等 App 缝注入的工具）：
+ * - listTools 结果前置注入清单（动态求值，随激活智能体/skills 配置变化）；
+ * - callTool 注入名优先路由到宿主缝执行（返回 MCP CallToolResult 形状），其余透传底层客户端。
+ *
+ * 动机：此前 a2a/skill 工具只注入在 agent 对话缝（chat-controller getTools/callTool），
+ * tools 调试页经同一 pageTools 实例看不到也调不到。统一收到注入层后，调试页与
+ * agent 循环共用同一份清单与执行路径（对齐「一处合成，多处消费」的既有分层决策）。
+ */
+export function attachInjectedTools(
+  pageTools: PageToolsClient,
+  deps: {
+    /** 动态注入工具清单（每次 listTools 调用时求值，置于页面/内置工具之前）。 */
+    listInjected: () => PageToolMeta[];
+    /** 是否为注入命名空间（callTool 路由判定）。 */
+    handles: (name: string) => boolean;
+    /** 执行注入工具（返回 MCP CallToolResult 同构形状）。 */
+    callInjected: (name: string, args: Record<string, unknown>) => Promise<unknown>;
+  }
+): PageToolsClient {
+  return {
+    async listTools() {
+      return [...deps.listInjected(), ...(await pageTools.listTools())];
+    },
+    callTool(name, args) {
+      return deps.handles(name) ? deps.callInjected(name, args) : pageTools.callTool(name, args);
     },
     setTargetTabs(tabIds) {
       pageTools.setTargetTabs(tabIds);
@@ -255,7 +297,7 @@ export function connectPageTools(
   requestTimeoutMs = 30_000
 ): PageToolsClient {
   const connections = new Map<number, TabConnection>();
-  /** 暴露名 → 路由目标（同名工具跨页签冲突时统一 tab<id>__ 前缀）。 */
+  /** 暴露名 → 路由目标（页面工具统一 tab<id>__ 前缀命名空间）。 */
   const routes = new Map<string, { conn: TabConnection; originalName: string }>();
   let disposed = false;
   let lastEmittedConnected: boolean | null = null;
@@ -459,22 +501,16 @@ export function connectPageTools(
 
   // ---- 工具清单合并与路由 ----
 
-  /** 依据各页签缓存清单重建路由表：同名工具跨页签冲突 → 全部冲突实例加 tab<id>__ 前缀。 */
+  /** 页签工具的统一暴露名：`tab<id>__` 前缀命名空间（单/多页签一致，`<id>` 为数据源页签 tabId）。 */
+  const exposedName = (conn: TabConnection, toolName: string): string =>
+    `tab${conn.tabId}__${toolName}`;
+
+  /** 依据各页签缓存清单重建路由表：页面工具统一加 tab<id>__ 前缀（单/多页签一致）。 */
   const rebuildRoutes = (): void => {
     routes.clear();
-    // 原始名 → 持有该名的页签数（>1 即冲突）
-    const owners = new Map<string, number>();
     for (const conn of connections.values()) {
       for (const tool of conn.lastTools ?? []) {
-        owners.set(tool.name, (owners.get(tool.name) ?? 0) + 1);
-      }
-    }
-    for (const conn of connections.values()) {
-      for (const tool of conn.lastTools ?? []) {
-        const exposed =
-          (owners.get(tool.name) ?? 0) > 1 ? `tab${conn.tabId}__${tool.name}` : tool.name;
-        // 边界：前缀名与另一页签原始名撞名时后者让位（极小概率，路由表后者覆盖前者）
-        routes.set(exposed, { conn, originalName: tool.name });
+        routes.set(exposedName(conn, tool.name), { conn, originalName: tool.name });
       }
     }
   };
@@ -519,8 +555,7 @@ export function connectPageTools(
       const merged: PageToolMeta[] = [];
       for (const conn of all) {
         for (const tool of conn.lastTools ?? []) {
-          const route = [...routes.entries()].find(([, target]) => target.conn === conn && target.originalName === tool.name);
-          merged.push(route ? { ...tool, name: route[0] } : tool);
+          merged.push({ ...tool, name: exposedName(conn, tool.name) });
         }
       }
       return merged;

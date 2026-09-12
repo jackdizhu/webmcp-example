@@ -25,7 +25,7 @@ export interface SkillDefinition extends SkillSummary {
 export const SKILL_L1_TOKEN_BUDGET = 100_000;
 
 /**
- * L2 技能加载工具名：双下划线前缀，与页面动态注册的工具（tab<id>__ / 业务命名）明确区分。
+ * L2 技能加载工具名：双下划线前缀，与页面动态注册的工具（统一 tab<id>__ 前缀命名）明确区分。
  * 注意：这是「加载技能」这个工具的名称；SKILL 的唯一标识是技能 id（如 page-tools-guide），
  * UI 展示 SKILL 调用记录时应显示技能 id（宿主经 callTool 缝捕获）。
  */

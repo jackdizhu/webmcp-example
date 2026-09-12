@@ -29,7 +29,8 @@ const validState: AgentProfilesState = {
       description: 'd',
       rules: { inheritGlobal: true, items: [{ id: 'r1', text: 't' }] },
       skills: [],
-      mcps: [],
+      a2aAgents: [],
+  mcps: [],
     },
   ],
   activeAgentId: 'page-qa',
@@ -42,10 +43,10 @@ beforeEach(() => {
 });
 
 describe('createAgentProfileStore', () => {
-  it('首次加载（存储为空）：迁移出内置双智能体并落盘，默认激活「单个tools调试」', async () => {
+  it('首次加载（存储为空）：迁移出内置三智能体并落盘，默认激活「单个tools调试」', async () => {
     const store = createAgentProfileStore(storage.stub);
     await store.load('旧系统提示词');
-    expect(store.agents.value.map((item) => item.id)).toEqual(['tool-debug', 'multi-turn-loop']);
+    expect(store.agents.value.map((item) => item.id)).toEqual(['tool-debug', 'multi-turn-loop', 'a2a-analyst']);
     expect(store.activeAgentId.value).toBe(DEFAULT_ACTIVE_AGENT_ID);
     expect(store.activeAgent.value?.name).toBe('单个tools调试');
     expect(storage.writes).toHaveLength(1);
@@ -58,7 +59,7 @@ describe('createAgentProfileStore', () => {
     const writesAfterFirst = storage.writes.length;
     const second = createAgentProfileStore(storage.stub);
     await second.load('旧提示');
-    expect(second.agents.value).toHaveLength(2);
+    expect(second.agents.value).toHaveLength(3);
     expect(second.activeAgentId.value).toBe(DEFAULT_ACTIVE_AGENT_ID);
     expect(storage.writes.length).toBe(writesAfterFirst);
   });
@@ -67,7 +68,7 @@ describe('createAgentProfileStore', () => {
     storage = createStorageStub({ [AGENT_PROFILES_STORAGE_KEY]: { agents: 'not-an-array' } });
     const store = createAgentProfileStore(storage.stub);
     await store.load('旧提示');
-    expect(store.agents.value).toHaveLength(2);
+    expect(store.agents.value).toHaveLength(3);
     expect(store.agents.value[0]!.id).toBe(DEFAULT_ACTIVE_AGENT_ID);
     expect(storage.writes).toHaveLength(1);
   });
@@ -79,10 +80,18 @@ describe('createAgentProfileStore', () => {
     expect(store.activeAgent.value?.id).toBe('page-qa');
     await store.setActive(DEFAULT_ACTIVE_AGENT_ID);
     expect(store.activeAgentId.value).toBe(DEFAULT_ACTIVE_AGENT_ID);
-    expect(storage.writes).toHaveLength(1);
-    const saved = storage.writes[0]![AGENT_PROFILES_STORAGE_KEY] as AgentProfilesState;
+    // load 时迁移（追加缺失内置智能体）落盘一次 + setActive 一次
+    expect(storage.writes).toHaveLength(2);
+    const saved = storage.writes[1]![AGENT_PROFILES_STORAGE_KEY] as AgentProfilesState;
     expect(saved.activeAgentId).toBe(DEFAULT_ACTIVE_AGENT_ID);
-    expect(saved.agents).toEqual(validState.agents);
+    // 用户自定义条目保留在首位，其后为追加的内置智能体
+    expect(saved.agents[0]).toEqual(validState.agents[0]);
+    expect(saved.agents.map((item) => item.id)).toEqual([
+      'page-qa',
+      'tool-debug',
+      'multi-turn-loop',
+      'a2a-analyst',
+    ]);
   });
 
   it('load 后 activeAgent 对 activeAgentId 未命中回落第一个', async () => {
@@ -92,5 +101,26 @@ describe('createAgentProfileStore', () => {
     const store = createAgentProfileStore(storage.stub);
     await store.load('旧提示');
     expect(store.activeAgent.value?.id).toBe('page-qa');
+  });
+
+  it('A2A 绑定持久化回归：updateAgentA2aAgents 后重新 load 数据保留且归属正确', async () => {
+    const refs = [{ id: 'dify_app', cardUrl: 'https://x.example.com/card.json', enabled: true }];
+    const first = createAgentProfileStore(storage.stub);
+    await first.load('旧提示');
+    await first.updateAgentA2aAgents('tool-debug', refs);
+    // 模拟重开侧栏：全新 store 实例从同一存储加载
+    const second = createAgentProfileStore(storage.stub);
+    await second.load('旧提示');
+    expect(second.agents.value.find((agent) => agent.id === 'tool-debug')?.a2aAgents).toEqual(refs);
+    // 其它智能体不受影响
+    expect(second.agents.value.find((agent) => agent.id === 'a2a-analyst')?.a2aAgents).toEqual([]);
+  });
+
+  it('updateAgentA2aAgents：目标智能体不存在时抛错（不静默丢数据）', async () => {
+    const store = createAgentProfileStore(storage.stub);
+    await store.load('旧提示');
+    await expect(
+      store.updateAgentA2aAgents('no-such-agent', [{ id: 'x', cardUrl: 'https://x/card.json', enabled: true }])
+    ).rejects.toThrow('目标智能体不存在');
   });
 });

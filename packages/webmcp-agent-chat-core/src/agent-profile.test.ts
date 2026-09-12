@@ -13,6 +13,7 @@ import {
   type AgentProfilesState,
   type AgentRules,
   type AgentSkillRef,
+  type AgentA2aRef,
 } from './agent-profile';
 import type { LlmConfig } from './llm-client';
 
@@ -23,6 +24,7 @@ const agent = (overrides: Partial<AgentProfile> = {}): AgentProfile => ({
   rules: { inheritGlobal: true, items: [{ id: 'r1', text: '优先调用页面工具。' }] },
   skills: [],
   mcps: [],
+  a2aAgents: [],
   ...overrides,
 });
 
@@ -36,6 +38,8 @@ const baseConfig: LlmConfig = {
 
 /** 非法技能引用（enabled 非布尔）：经 unknown 断言绕过编译期检查，验证运行时校验。 */
 const badSkillRef = { id: 's', enabled: 'x' } as unknown as AgentSkillRef;
+/** 非法 A2A 引用（enabled 非布尔）：同上。 */
+const badA2aRef = { id: 'd', cardUrl: 'https://x.example.com/card.json', enabled: 1 } as unknown as AgentA2aRef;
 /** 非法 rules（inheritGlobal 非布尔）：同上。 */
 const badRules = { inheritGlobal: 'yes', items: [] } as unknown as AgentRules;
 
@@ -123,10 +127,20 @@ describe('mergeLlmConfig', () => {
 });
 
 describe('createBuiltinAgentProfiles', () => {
-  it('内置双智能体：单个tools调试（默认激活）+ 多轮循环智能体', () => {
+  it('内置三智能体：单个tools调试（默认激活）+ 多轮循环智能体 + A2A智能体', () => {
     const profiles = createBuiltinAgentProfiles();
-    expect(profiles.map((item) => item.id)).toEqual(['tool-debug', 'multi-turn-loop']);
-    expect(profiles.map((item) => item.name)).toEqual(['单个tools调试', '多轮循环智能体']);
+    expect(profiles.map((item) => item.id)).toEqual(['tool-debug', 'multi-turn-loop', 'a2a-analyst']);
+    expect(profiles.map((item) => item.name)).toEqual(['单个tools调试', '多轮循环智能体', 'A2A智能体']);
+  });
+
+  it('A2A智能体：继承全局且规则要求分析优先调用 a2a__ 工具', () => {
+    const a2aAgent = createBuiltinAgentProfiles().find((item) => item.id === 'a2a-analyst');
+    expect(a2aAgent).toBeDefined();
+    expect(a2aAgent!.rules.inheritGlobal).toBe(true);
+    expect(a2aAgent!.rules.items[0]!.id).toBe('a2a-first-analysis');
+    expect(a2aAgent!.rules.items[0]!.text).toContain('a2a__<id>__send_task');
+    expect(a2aAgent!.rules.items[0]!.text).toContain('优先调用');
+    expect(a2aAgent!.rules.items[0]!.text).toContain('tab<id>__');
   });
 
   it('单个tools调试不继承全局自带单工具约束；多轮循环智能体继承全局并带计划/异常停止规则', () => {
@@ -149,14 +163,14 @@ describe('createBuiltinAgentProfiles', () => {
 });
 
 describe('migrateLegacySettings', () => {
-  it('existing 为空时创建内置双智能体，默认激活「单个tools调试」', () => {
+  it('existing 为空时创建内置三智能体，默认激活「单个tools调试」', () => {
     const state = migrateLegacySettings({ systemPrompt: '旧提示' }, null);
-    expect(state.agents).toHaveLength(2);
+    expect(state.agents).toHaveLength(3);
     expect(state.activeAgentId).toBe(DEFAULT_ACTIVE_AGENT_ID);
     expect(state.agents[0]!.id).toBe('tool-debug');
   });
 
-  it('旧版未定制默认智能体（仅一个 id=default 空规则）→ 升级为内置双智能体', () => {
+  it('旧版未定制默认智能体（仅一个 id=default 空规则）→ 升级为内置智能体全集', () => {
     const legacyState: AgentProfilesState = {
       agents: [
         {
@@ -166,12 +180,13 @@ describe('migrateLegacySettings', () => {
           rules: { inheritGlobal: true, items: [] },
           skills: [],
           mcps: [],
+          a2aAgents: [],
         },
       ],
       activeAgentId: LEGACY_DEFAULT_AGENT_ID,
     };
     const state = migrateLegacySettings({ systemPrompt: '旧提示' }, legacyState);
-    expect(state.agents.map((item) => item.id)).toEqual(['tool-debug', 'multi-turn-loop']);
+    expect(state.agents.map((item) => item.id)).toEqual(['tool-debug', 'multi-turn-loop', 'a2a-analyst']);
     expect(state.activeAgentId).toBe(DEFAULT_ACTIVE_AGENT_ID);
   });
 
@@ -192,6 +207,7 @@ describe('migrateLegacySettings', () => {
           rules: { inheritGlobal: true, items: [] },
           skills: [{ id: 'page-tools-guide', enabled: true }],
           mcps: [],
+          a2aAgents: [],
         },
         agent({ id: 'my-custom', name: '我的自定义' }),
       ],
@@ -200,34 +216,78 @@ describe('migrateLegacySettings', () => {
     const state = migrateLegacySettings({ systemPrompt: '旧提示' }, v51State);
     expect(state).not.toBe(v51State);
     expect(state.activeAgentId).toBe('my-custom');
-    expect(state.agents).toHaveLength(3);
+    // 原位刷新 multi-turn-loop 的 rules + 追加缺失的 a2a-analyst
+    expect(state.agents).toHaveLength(4);
     const multiTurn = state.agents.find((item) => item.id === 'multi-turn-loop');
     expect(multiTurn!.rules.items.map((item) => item.id)).toEqual(['plan-first', 'stop-on-anomaly']);
     expect(state.agents.find((item) => item.id === 'my-custom')).toBeDefined();
+    expect(state.agents.find((item) => item.id === 'a2a-analyst')).toBeDefined();
     expect(JSON.stringify(state.agents.find((item) => item.id === 'tool-debug'))).toBe(JSON.stringify(currentToolDebug));
   });
 
-  it('用户删除过某内置条目时不复活（仅原位刷新仍存在的条目）', () => {
+  it('存量档案缺失新增内置智能体时追加下发（用户数据与自定义条目不动）', () => {
     const [toolDebugOnly] = [createBuiltinAgentProfiles()[0]!];
     const state = migrateLegacySettings(
       { systemPrompt: '' },
       { agents: [{ ...toolDebugOnly }], activeAgentId: 'tool-debug' }
     );
-    expect(state.agents).toHaveLength(1);
-    expect(state.agents[0]!.id).toBe('tool-debug');
+    // 缺失的 multi-turn-loop 与 a2a-analyst 追加到末尾，已有条目原样保留
+    expect(state.agents.map((item) => item.id)).toEqual(['tool-debug', 'multi-turn-loop', 'a2a-analyst']);
+    expect(JSON.stringify(state.agents[0])).toBe(JSON.stringify(toolDebugOnly));
+    expect(state.activeAgentId).toBe('tool-debug');
   });
 
-  it('幂等：用户已定制（非纯 legacy 默认）时原样返回，不覆盖', () => {
+  it('幂等：缺失内置条目补齐后再迁移原样返回（引用恒等）', () => {
+    const state = migrateLegacySettings(
+      { systemPrompt: '' },
+      { agents: [{ ...createBuiltinAgentProfiles()[0]! }], activeAgentId: 'tool-debug' }
+    );
+    expect(migrateLegacySettings({ systemPrompt: '' }, state)).toBe(state);
+  });
+
+  it('幂等：用户已定制（全部内置条目齐备 + 自定义）时原样返回，不覆盖', () => {
     const existing: AgentProfilesState = {
-      agents: [agent(), createBuiltinAgentProfiles()[0]!],
+      agents: [agent(), ...createBuiltinAgentProfiles()],
       activeAgentId: 'page-qa',
     };
     expect(migrateLegacySettings({ systemPrompt: '旧提示' }, existing)).toBe(existing);
   });
 
+  it('内置条目上的用户数据在原位刷新时保留（a2aAgents / llmOverride 不被清空）', () => {
+    const [toolDebug] = createBuiltinAgentProfiles();
+    const a2aRefs = [{ id: 'dify_app', cardUrl: 'http://localhost/a/card.json', enabled: true, endpointOverride: 'http://localhost/e/app/a2a' }];
+    const existing: AgentProfilesState = {
+      agents: [
+        {
+          ...toolDebug!,
+          a2aAgents: a2aRefs,
+          llmOverride: { model: 'my-model' },
+        },
+      ],
+      activeAgentId: 'tool-debug',
+    };
+    const state = migrateLegacySettings({ systemPrompt: '' }, existing);
+    const refreshed = state.agents.find((item) => item.id === 'tool-debug');
+    expect(refreshed).toBeDefined();
+    expect(refreshed!.a2aAgents).toEqual(a2aRefs);
+    expect(refreshed!.llmOverride).toEqual({ model: 'my-model' });
+  });
+
+  it('幂等：托管字段相同时刷新不触发（即使带用户数据）', () => {
+    const existing: AgentProfilesState = {
+      agents: createBuiltinAgentProfiles().map((builtin) =>
+        builtin.id === 'tool-debug'
+          ? { ...builtin, a2aAgents: [{ id: 'x', cardUrl: 'https://x/card.json', enabled: false }] }
+          : builtin
+      ),
+      activeAgentId: 'tool-debug',
+    };
+    expect(migrateLegacySettings({ systemPrompt: '' }, existing)).toBe(existing);
+  });
+
   it('existing.agents 为空数组时仍走重建路径', () => {
     const state = migrateLegacySettings({ systemPrompt: '' }, { agents: [], activeAgentId: '' });
-    expect(state.agents).toHaveLength(2);
+    expect(state.agents).toHaveLength(3);
     expect(state.activeAgentId).toBe(DEFAULT_ACTIVE_AGENT_ID);
   });
 });
@@ -263,7 +323,19 @@ describe('validateAgentProfilesState', () => {
     ['agent.id 为空串', { agents: [{ ...agent(), id: '' }], activeAgentId: 'a' }, 'agent.id'],
     ['rules.inheritGlobal 非布尔', { agents: [agent({ rules: badRules })], activeAgentId: 'a' }, 'inheritGlobal'],
     ['skills 条目非法', { agents: [agent({ skills: [badSkillRef] })], activeAgentId: 'a' }, 'skills'],
+    ['a2aAgents 条目非法', { agents: [agent({ a2aAgents: [badA2aRef] })], activeAgentId: 'a' }, 'a2aAgents'],
   ])('非法状态 %s 抛错（含 %s）', (_label, value, reason) => {
     expect(() => validateAgentProfilesState(value)).toThrow(new RegExp(reason));
+  });
+
+  it('a2aAgents 合法引用通过校验；内置档案默认带空 a2aAgents', () => {
+    const state: AgentProfilesState = {
+      agents: [agent({ a2aAgents: [{ id: 'doc', cardUrl: 'https://a2a.example.com/card.json', enabled: true }] })],
+      activeAgentId: 'page-qa',
+    };
+    expect(validateAgentProfilesState(structuredClone(state))).toEqual(state);
+    for (const builtin of createBuiltinAgentProfiles()) {
+      expect(builtin.a2aAgents).toEqual([]);
+    }
   });
 });
