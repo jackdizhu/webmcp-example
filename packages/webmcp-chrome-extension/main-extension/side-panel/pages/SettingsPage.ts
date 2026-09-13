@@ -58,12 +58,36 @@ export const SettingsPage = defineComponent({
       await refreshLogCount();
     };
 
+    // S3 清空日志两步确认：首次点击进入待确认态（3s 超时还原），再次点击才真正清空
+    const confirmClear = ref(false);
+    let confirmClearTimer: ReturnType<typeof setTimeout> | undefined;
+    const resetConfirmClear = (): void => {
+      confirmClear.value = false;
+      if (confirmClearTimer !== undefined) {
+        clearTimeout(confirmClearTimer);
+        confirmClearTimer = undefined;
+      }
+    };
+    const handleClearLogsClick = (): void => {
+      if (!confirmClear.value) {
+        confirmClear.value = true;
+        confirmClearTimer = setTimeout(() => {
+          confirmClear.value = false;
+          confirmClearTimer = undefined;
+        }, 3000);
+        return;
+      }
+      resetConfirmClear();
+      void handleClearLogs();
+    };
+
     // 进入设置页时清空提示并刷新日志条数展示（原 App watch(activeTab) settings 分支）
     watch(
       () => props.active,
       (isActive) => {
         if (isActive) {
           logHint.value = '';
+          resetConfirmClear();
           void refreshLogCount();
         }
       },
@@ -73,17 +97,27 @@ export const SettingsPage = defineComponent({
     // 表单 dirty 状态（Form 上抛；view 态摘要显示「有未保存修改」提示用）
     const formDirty = ref(false);
 
+    // S2 日志区降级为页脚折叠 <details>（默认收起，summary 行显示标题 + 条数）
     const renderLogs = (): (VNode | null)[] => [
-      h('div', { class: 'settings-logs' }, [
-        h(
-          'span',
-          { class: 'settings-log-count' },
-          logCountValue.value !== null ? t('settings.logsCount', { count: logCountValue.value }) : ''
-        ),
-        h('button', { class: 'ghost', type: 'button', onClick: () => void handleExportLogs() }, t('settings.exportLogs')),
-        h('button', { class: 'ghost', type: 'button', onClick: () => void handleClearLogs() }, t('settings.clearLogs')),
+      h('details', { class: 'settings-logs-fold' }, [
+        h('summary', [
+          h('span', t('settings.logsTitle')),
+          h(
+            'span',
+            { class: 'settings-log-count' },
+            logCountValue.value !== null ? t('settings.logsCount', { count: logCountValue.value }) : ''
+          ),
+        ]),
+        h('div', { class: 'settings-logs' }, [
+          h('button', { class: 'ghost', type: 'button', onClick: () => void handleExportLogs() }, t('settings.exportLogs')),
+          h('button', {
+            class: confirmClear.value ? 'ghost danger-ghost danger-ghost-armed' : 'ghost danger-ghost',
+            type: 'button',
+            onClick: handleClearLogsClick,
+          }, confirmClear.value ? t('settings.confirmClearLogs') : t('settings.clearLogs')),
+        ]),
+        logHint.value ? h('p', { class: 'settings-hint' }, logHint.value) : null,
       ]),
-      logHint.value ? h('p', { class: 'settings-hint' }, logHint.value) : null,
     ];
 
     return () => {
@@ -92,17 +126,19 @@ export const SettingsPage = defineComponent({
       const body: (VNode | null)[] =
         mode.value === 'view'
           ? [
-              h(SettingsSummary, { settings: props.settings, dirty: formDirty.value }),
-              h('div', { class: 'page-mode-actions page-mode-actions-padded' }, [
-                h('button', {
-                  type: 'button',
-                  disabled: props.busy,
-                  onClick: () => {
-                    mode.value = 'edit';
-                  },
-                }, t('settings.editConfig')),
-                props.busy ? h('p', { class: 'settings-hint' }, t('settings.lockedHint')) : null,
-              ]),
+              // S7 摘要卡片化：「编辑配置」移入卡片标题行右侧（slot actions），省一整行孤悬按钮
+              h(SettingsSummary, { settings: props.settings, dirty: formDirty.value }, {
+                actions: () => [
+                  h('button', {
+                    type: 'button',
+                    disabled: props.busy,
+                    onClick: () => {
+                      mode.value = 'edit';
+                    },
+                  }, t('settings.editConfig')),
+                ],
+              }),
+              props.busy ? h('p', { class: 'settings-hint' }, t('settings.lockedHint')) : null,
               ...renderLogs(),
             ]
           : [

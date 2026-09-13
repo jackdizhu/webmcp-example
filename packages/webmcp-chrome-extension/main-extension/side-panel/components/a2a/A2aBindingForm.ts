@@ -6,7 +6,7 @@
 // 草稿态：端点覆盖统一用空串表示「未覆盖」（exactOptionalPropertyTypes 字段移除语义），
 // 保存时由宿主（A2aAgentsSection）归一化落库。
 // 模板用 h() 渲染函数（MV3 扩展页 CSP 禁止运行时字符串编译，见 issues/001）。
-import { defineComponent, h, ref, watch, type PropType } from 'vue';
+import { defineComponent, h, ref, watch, type PropType, type VNode } from 'vue';
 import { isHttpUrl, validateA2aAgentId, type AgentA2aRef } from 'webmcp-agent-chat-core';
 import { t } from '../../i18n';
 import type { A2aBindingTargetAgent } from './A2aBindingList';
@@ -108,17 +108,23 @@ export const A2aBindingForm = defineComponent({
 
     return () => {
       const isAdd = props.mode === 'add';
+      // A7：字段补 label（输入后 placeholder 消失仍可辨认字段语义；可选字段在标签中标注）
+      const field = (label: string, control: VNode): VNode =>
+        h('label', { class: 'a2a-form-field' }, [h('span', label), control]);
       return h('div', { class: 'a2a-add-form' }, [
-        // id：add = 可编辑输入（格式/重复校验）；edit = 只读标签 + 启停开关
+        // id：add = 可编辑输入（格式/重复校验）；edit = 只读标签 + 启停开关（创建后不可修改）
         isAdd
-          ? h('input', {
-              type: 'text',
-              placeholder: t('a2a.add.idPlaceholder'),
-              value: draftId.value,
-              onInput: (event: Event) => {
-                draftId.value = (event.target as HTMLInputElement).value;
-              },
-            })
+          ? field(
+              t('a2a.form.id'),
+              h('input', {
+                type: 'text',
+                placeholder: t('a2a.add.idPlaceholder'),
+                value: draftId.value,
+                onInput: (event: Event) => {
+                  draftId.value = (event.target as HTMLInputElement).value;
+                },
+              })
+            )
           : h('div', { class: 'a2a-item-head' }, [
               h('input', {
                 type: 'checkbox',
@@ -129,36 +135,45 @@ export const A2aBindingForm = defineComponent({
                   enabled.value = (event.target as HTMLInputElement).checked;
                 },
               }),
-              h('label', { class: 'a2a-item-id', for: 'a2a-item-enabled' }, props.item?.id ?? ''),
+              h('label', { class: 'a2a-item-id', for: 'a2a-item-enabled', title: t('a2a.form.id') }, props.item?.id ?? ''),
               h('span', { class: 'a2a-item-state' }, enabled.value ? t('a2a.enabled') : t('a2a.disabled')),
             ]),
-        h('input', {
-          type: 'url',
-          placeholder: isAdd
-            ? t('a2a.add.cardUrlPlaceholder')
-            : 'https://example.com/.well-known/agent-card.json',
-          value: cardUrl.value,
-          onInput: (event: Event) => {
-            cardUrl.value = (event.target as HTMLInputElement).value;
-          },
-        }),
-        h('input', {
-          type: 'url',
-          placeholder: t('a2a.endpointPlaceholder'),
-          value: endpointOverride.value,
-          onInput: (event: Event) => {
-            endpointOverride.value = (event.target as HTMLInputElement).value;
-          },
-        }),
-        h('input', {
-          type: 'password',
-          placeholder: isAdd ? t('a2a.add.tokenPlaceholder') : t('a2a.tokenPlaceholder', { id: props.item?.id ?? '' }),
-          autocomplete: 'off',
-          value: draftToken.value,
-          onInput: (event: Event) => {
-            draftToken.value = (event.target as HTMLInputElement).value;
-          },
-        }),
+        field(
+          t('a2a.cardUrl'),
+          h('input', {
+            type: 'url',
+            placeholder: isAdd
+              ? t('a2a.add.cardUrlPlaceholder')
+              : 'https://example.com/.well-known/agent-card.json',
+            value: cardUrl.value,
+            onInput: (event: Event) => {
+              cardUrl.value = (event.target as HTMLInputElement).value;
+            },
+          })
+        ),
+        field(
+          t('a2a.form.endpointOptional'),
+          h('input', {
+            type: 'url',
+            placeholder: t('a2a.endpointPlaceholder'),
+            value: endpointOverride.value,
+            onInput: (event: Event) => {
+              endpointOverride.value = (event.target as HTMLInputElement).value;
+            },
+          })
+        ),
+        field(
+          t('a2a.form.tokenOptional'),
+          h('input', {
+            type: 'password',
+            placeholder: isAdd ? t('a2a.add.tokenPlaceholder') : t('a2a.tokenPlaceholder', { id: props.item?.id ?? '' }),
+            autocomplete: 'off',
+            value: draftToken.value,
+            onInput: (event: Event) => {
+              draftToken.value = (event.target as HTMLInputElement).value;
+            },
+          })
+        ),
         error.value ? h('p', { class: 'settings-hint settings-hint-error' }, error.value) : null,
         isAdd
           ? h('button', { type: 'button', disabled: props.busy, onClick: () => handleSubmit() }, t('a2a.add.submit'))

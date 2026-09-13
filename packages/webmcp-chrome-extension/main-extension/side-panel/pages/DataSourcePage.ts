@@ -53,7 +53,7 @@ export const DataSourcePage = defineComponent({
                     mode.value = 'edit';
                   },
                 }, t('ds.adjust')),
-                props.locked ? h('p', { class: 'relay-page-status' }, t('ds.lockedHint')) : null,
+                props.locked ? h('p', { class: 'settings-hint settings-hint-warn' }, t('ds.lockedHint')) : null,
               ]),
             ]
           : [

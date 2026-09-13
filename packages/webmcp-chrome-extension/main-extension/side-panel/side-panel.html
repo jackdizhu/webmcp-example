@@ -136,12 +136,8 @@
       .settings-hint-ok { color: var(--ok); }
       .settings-hint-warn { color: #b45309; }
 
-      /* 设置页只读摘要（编辑态/只读态拆分，2026-09-13）：当前已保存生效配置 */
-      .settings-summary {
-        display: flex; flex-direction: column; gap: 6px; padding: 12px;
-        background: var(--surface); border-bottom: 1px solid var(--border);
-      }
-      .settings-summary h4 { font-size: 13px; color: var(--text); font-weight: 600; }
+      /* 设置页只读摘要容器已升级为 .settings-card（2026-09-13 方案二 S7，规则见「页内 UI 优化」段）；
+         .settings-summary-row / -label / -value 仍被 SettingsSummary 使用，保留。 */
       .settings-summary-row { display: flex; gap: 8px; font-size: 12px; }
       .settings-summary-label { flex: none; width: 92px; color: var(--muted); }
       .settings-summary-value { color: var(--text); word-break: break-all; }
@@ -443,6 +439,119 @@
       }
       input:focus-visible, select:focus-visible, textarea:focus-visible {
         outline-offset: 0; border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent);
+      }
+
+      /* ==================================================================
+       * 页内 UI 优化（2026-09-13 方案二落地，见 docs/side-panel-page-ui-optimize-design.md）
+       * 规则与 docs/theme-preview/styles/panel-optimize.css 同源；
+       * 令牌命名与 docs/theme-preview/styles/tokens.css 对齐（全局主题方案落地时可直接映射）。
+       * 编号 D/A/S/C 对应文档中的问题清单。
+       * ================================================================== */
+      :root {
+        --fs-1: 10px;
+        --fs-2: 11px;
+        --sp-2: 4px;
+        --sp-3: 6px;
+        --sp-4: 8px;
+        --sp-5: 12px;
+        --r-pill: 999px;
+        --rail-ok: var(--ok);
+        --rail-warn: var(--warn);
+        --rail-err: var(--err);
+        --rail-idle: var(--border-strong);
+      }
+
+      /* ---- 数据源页（D1 选中标识 / D7 URL 次行 / 统计并入标题行）---- */
+      .section-head { display: flex; align-items: baseline; gap: var(--sp-4); flex-wrap: wrap; }
+      .relay-source-item { flex-wrap: wrap; }
+      .relay-source-item-selected { border-left: 2px solid var(--accent); background: var(--accent-soft); }
+      .relay-badge-selected { color: var(--accent); background: var(--accent-soft); border: 1px solid var(--accent); }
+      .relay-source-info { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
+      .relay-source-url {
+        font: var(--fs-1)/1.4 var(--mono); color: var(--faint);
+        overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+      }
+      /* 空态统一规格（C3：对话页 .empty 之外的页面共用） */
+      .page-empty {
+        border: 1px dashed var(--border-strong); border-radius: var(--radius-md);
+        padding: var(--sp-5); color: var(--muted); font-size: 12px; line-height: 1.7;
+        display: flex; flex-direction: column; gap: var(--sp-4); align-items: flex-start;
+      }
+
+      /* ---- A2A 页（A1 目标工具条 / A2 操作行 / A3 两步确认 / A4 徽章 / A5 结果分级 / A8 notice）---- */
+      .a2a-target-bar {
+        display: flex; align-items: center; gap: var(--sp-3);
+        padding: var(--sp-3) var(--sp-4);
+        border: 1px solid var(--border); border-left: 2px solid var(--accent);
+        border-radius: var(--radius-md); background: var(--surface);
+      }
+      .a2a-target-label {
+        flex: none; font: 600 var(--fs-2) var(--mono);
+        letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted);
+      }
+      .a2a-target-select {
+        flex: 1; min-width: 0; padding: 4px 8px;
+        border: 1px solid var(--border-strong); border-radius: var(--radius-sm);
+        font: inherit; font-size: 12px; background: var(--bg); color: var(--text-strong);
+      }
+      .a2a-target-select:disabled { opacity: 0.5; cursor: not-allowed; }
+      .a2a-item-head { flex-wrap: wrap; }
+      .a2a-item-actions {
+        display: flex; gap: var(--sp-3); justify-content: flex-end;
+        padding-top: var(--sp-3); border-top: 1px dashed var(--border);
+      }
+      .danger-ghost { color: var(--err); border-color: var(--err-border); }
+      .danger-ghost:hover:not(:disabled) { background: var(--err-soft); border-color: var(--err); }
+      .danger-ghost-armed { background: var(--err-soft); }
+      .a2a-meta-badge {
+        font: var(--fs-1) var(--mono); border-radius: var(--r-pill);
+        padding: 1px var(--sp-4); line-height: 15px; letter-spacing: 0.04em;
+      }
+      .a2a-meta-badge-ok { color: var(--ok); background: var(--ok-soft); }
+      .a2a-meta-badge-muted { color: var(--muted); background: var(--surface-raise); }
+      .a2a-test-result { font: var(--fs-2)/1.5 var(--mono); border-left: 2px solid var(--rail-idle); padding-left: var(--sp-3); }
+      .a2a-test-result-ok { color: var(--ok); border-left-color: var(--rail-ok); }
+      .a2a-test-result-err { color: var(--err); border-left-color: var(--rail-err); }
+      /* A4：meta 值单行省略（配合 .ts 的 title 悬停看全量） */
+      .a2a-item-meta-value { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+      .a2a-form-field { display: flex; flex-direction: column; gap: var(--sp-2); font-size: 12px; color: var(--text); }
+      .settings-notice {
+        display: flex; align-items: center; gap: var(--sp-3);
+        padding: var(--sp-3) var(--sp-4); border-radius: var(--radius-md);
+        flex-wrap: wrap; font-size: 12px;
+      }
+      .settings-notice-error { border: 1px solid var(--err-border); border-left: 2px solid var(--rail-err); background: var(--err-soft); color: var(--err); }
+      .settings-notice-ok { border: 1px solid var(--ok-soft); border-left: 2px solid var(--rail-ok); background: var(--ok-soft); color: var(--ok); }
+
+      /* ---- 设置页（S1 分组 / S2 日志折叠 / S5 长值省略 / S6 表单分组 / S7 卡片化）---- */
+      .settings-card {
+        display: flex; flex-direction: column; gap: var(--sp-4);
+        margin: var(--sp-5); padding: var(--sp-5);
+        border: 1px solid var(--border); border-left: 2px solid var(--accent);
+        border-radius: var(--radius-md); background: var(--surface);
+      }
+      .settings-card-head { display: flex; align-items: center; justify-content: space-between; gap: var(--sp-4); }
+      .settings-card-head h4 { font-size: 13px; font-weight: 600; color: var(--text-strong); }
+      .settings-summary-group { display: flex; flex-direction: column; gap: var(--sp-2); padding-top: var(--sp-3); border-top: 1px solid var(--border); }
+      .settings-summary-group h5 {
+        font: 600 var(--fs-1) var(--mono);
+        letter-spacing: 0.1em; text-transform: uppercase; color: var(--faint);
+      }
+      .settings-summary-value { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+      .settings-logs-fold {
+        margin: 0 var(--sp-5) var(--sp-5);
+        border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--surface);
+      }
+      .settings-logs-fold summary {
+        padding: var(--sp-3) var(--sp-4); font: var(--fs-2) var(--mono);
+        color: var(--muted); cursor: pointer;
+      }
+      .settings-logs-fold[open] summary { border-bottom: 1px solid var(--border); margin-bottom: var(--sp-3); }
+      .settings-logs-fold .settings-logs { padding: 0 var(--sp-4) var(--sp-4); border-top: none; }
+      .settings-group-title {
+        font: 600 var(--fs-1) var(--mono);
+        letter-spacing: 0.1em; text-transform: uppercase; color: var(--faint);
+        padding-top: var(--sp-3); border-top: 1px solid var(--border); margin-top: var(--sp-2);
       }
 
       /* 细滚动条（WebKit 系）+ 动效降级 */

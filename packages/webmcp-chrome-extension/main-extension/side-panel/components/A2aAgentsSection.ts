@@ -107,11 +107,17 @@ export const A2aAgentsSection = defineComponent({
 
     return () => {
       const agent = targetAgent();
+      // A8：全局 notice 升级为卡片（边框 + 左缘状态条），失败/成功视觉分级
       const noticeNode =
         props.notice !== null
           ? h(
               'p',
-              { class: props.notice.kind === 'error' ? 'settings-hint settings-hint-error' : 'settings-hint settings-hint-ok' },
+              {
+                class:
+                  props.notice.kind === 'error'
+                    ? 'settings-notice settings-notice-error'
+                    : 'settings-notice settings-notice-ok',
+              },
               props.notice.text
             )
           : null;
@@ -162,14 +168,31 @@ export const A2aAgentsSection = defineComponent({
       }
 
       // ---- 列表页（默认：只读卡片 + 行级操作 + 新增入口 + 目标选择器）----
+      // A1 目标工具条：mono 标签 + 目标选择器 + 当前目标徽章（非激活警示收敛为徽章 title 悬停提示）
+      const targetBadge =
+        agent !== null
+          ? h(
+              'span',
+              {
+                class:
+                  props.targetAgentId !== props.activeAgentId
+                    ? 'relay-badge relay-badge-reconnecting'
+                    : 'relay-badge',
+                title:
+                  props.targetAgentId !== props.activeAgentId
+                    ? t('a2a.viewTargetNotActive')
+                    : undefined,
+              },
+              t('a2a.targetShowing', { name: agent.name })
+            )
+          : null;
       return h('div', { class: 'settings-a2a' }, [
-        h('p', { class: 'settings-hint' }, t('a2a.hint')),
-        // 查看态显式标注「当前展示谁的绑定」+ 目标选择器（管理非激活智能体的绑定入口）
-        h('div', { class: 'a2a-item-head' }, [
-          h('label', { class: 'a2a-item-id', for: 'a2a-target-agent' }, t('a2a.editTarget')),
+        h('div', { class: 'a2a-target-bar' }, [
+          h('label', { class: 'a2a-target-label', for: 'a2a-target-agent' }, t('a2a.editTarget')),
           h(
             'select',
             {
+              class: 'a2a-target-select',
               id: 'a2a-target-agent',
               value: props.targetAgentId,
               onChange: (event: Event) => {
@@ -186,13 +209,9 @@ export const A2aAgentsSection = defineComponent({
               )
             )
           ),
+          targetBadge,
         ]),
-        h('p', { class: 'settings-hint' }, [
-          agent !== null ? t('a2a.viewTarget', { name: agent.name }) : '',
-          agent !== null && props.targetAgentId !== props.activeAgentId
-            ? t('a2a.viewTargetNotActive')
-            : '',
-        ]),
+        h('p', { class: 'settings-hint' }, t('a2a.hint')),
         noticeNode,
         agent === null
           ? h('p', { class: 'settings-hint' }, t('a2a.noEditableAgent'))
@@ -202,6 +221,10 @@ export const A2aAgentsSection = defineComponent({
               testConnection: props.testConnection,
               onEdit: (id: string) => openEdit(id),
               onRemove: (id: string) => handleRemove(id),
+              // A6 空态 CTA：从列表页直接进入新增子页面
+              onAdd: () => {
+                view.value = 'add';
+              },
             }),
         h('div', { class: 'page-mode-actions' }, [
           h('button', {

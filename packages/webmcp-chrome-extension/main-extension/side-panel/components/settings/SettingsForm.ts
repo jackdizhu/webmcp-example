@@ -178,8 +178,13 @@ export const SettingsForm = defineComponent({
         h('p', { class: 'settings-hint' }, attrs.hint),
       ]);
 
+    // S6：编辑表单与摘要摘要同构分组（三组标题，API Key 保持首字段）
+    const groupTitle = (key: 'settings.summary.group.auth' | 'settings.summary.group.generation' | 'settings.summary.group.behavior'): VNode =>
+      h('div', { class: 'settings-group-title' }, t(key));
+
     return () =>
       h('section', { class: 'settings' }, [
+        groupTitle('settings.summary.group.auth'),
         textInput('API Key', 'apiKey', { type: 'password', placeholder: 'sk-...', autocomplete: 'off' }),
         protocolSelect(),
         textInput('Base URL', 'baseUrl', { type: 'text', placeholder: 'https://api.deepseek.com' }),
@@ -189,6 +194,7 @@ export const SettingsForm = defineComponent({
           hint: t('settings.form.apiPathHint'),
         }),
         draft.value.apiProtocol === 'anthropic' ? maxTokensInput() : null,
+        groupTitle('settings.summary.group.generation'),
         textInput(t('settings.form.model'), 'model', { type: 'text', placeholder: 'deepseek-v4-flash' }),
         textareaInput(t('settings.form.systemPrompt'), {
           placeholder: t('settings.form.systemPromptPlaceholder'),
@@ -199,6 +205,7 @@ export const SettingsForm = defineComponent({
           step: 1,
           hint: t('settings.form.maxHistoryTurnsHint'),
         }),
+        groupTitle('settings.summary.group.behavior'),
         checkbox(
           'consoleOutput',
           t('settings.form.consoleOutput')

@@ -53,7 +53,7 @@ export const DataSourcePicker = defineComponent({
           t('ds.picker.globalSelection', { count: props.selection.tabIds.length })
         ),
         sorted.length === 0
-          ? h('p', { class: 'relay-page-empty-status' }, t('ds.picker.empty'))
+          ? h('div', { class: 'page-empty' }, t('ds.picker.empty'))
           : h(
               'ul',
               { class: 'relay-source-list' },
