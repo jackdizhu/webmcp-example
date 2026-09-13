@@ -4,6 +4,7 @@
 // 智能体切换语义（D4）：选择器只发出请求，确认流由 App 层守卫与执行；
 // 本页仅渲染「确认切换」提示条（pendingSwitchName 非空时显示）。
 import { defineComponent, h, type PropType } from 'vue';
+import { t } from '../i18n';
 import { Composer } from '../components/Composer';
 import { MessageList } from '../components/MessageList';
 import type { UiMessage } from '../components/types';
@@ -49,7 +50,7 @@ export const ChatPage = defineComponent({
     return () =>
       h('div', { class: 'chat-page', style: { display: props.active ? '' : 'none' } }, [
         h('div', { class: 'chat-agents' }, [
-          h('span', { class: 'chat-agents-label' }, '智能体'),
+          h('span', { class: 'chat-agents-label' }, t('chat.agentLabel')),
           h(
             'select',
             {
@@ -78,7 +79,7 @@ export const ChatPage = defineComponent({
               disabled: props.locked,
               onClick: () => emit('inspect-prompt'),
             },
-            '查看提示词'
+            t('chat.inspectPrompt')
           ),
         ]),
         props.pendingSwitchName.length > 0
@@ -86,17 +87,17 @@ export const ChatPage = defineComponent({
               h(
                 'span',
                 { class: 'chat-agent-confirm-text' },
-                `切换到「${props.pendingSwitchName}」将开启新会话，当前对话历史将被清空。`
+                t('chat.switchConfirm', { name: props.pendingSwitchName })
               ),
               h(
                 'button',
                 { class: 'chat-agent-confirm-btn', onClick: () => emit('confirm-switch') },
-                '确认切换'
+                t('chat.switchConfirmYes')
               ),
               h(
                 'button',
                 { class: 'ghost chat-agent-confirm-cancel', onClick: () => emit('cancel-switch') },
-                '取消'
+                t('common.cancel')
               ),
             ])
           : null,

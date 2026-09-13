@@ -5,6 +5,7 @@
 // 模板用 h() 渲染函数（MV3 扩展页 CSP 禁止运行时字符串编译，见 issues/001）。
 import { defineComponent, h, type PropType } from 'vue';
 import type { RelayInvokeLogEntry } from '../../../core/relay-status-protocol';
+import { t } from '../i18n';
 
 /** 时间戳 → HH:MM:SS 展示。 */
 function formatTime(startedAt: number): string {
@@ -33,7 +34,11 @@ export const RelayPage = defineComponent({
         : entry.ok
           ? 'invoke-badge-ok'
           : 'invoke-badge-fail';
-      const badgeText = running ? '执行中' : entry.ok ? '成功' : '失败';
+      const badgeText = running
+        ? t('common.state.running')
+        : entry.ok
+          ? t('common.state.ok')
+          : t('common.state.fail');
       return h('li', { class: ['invoke-item', running ? 'invoke-item-running' : ''], key: `${entry.callId}-${String(entry.startedAt)}` }, [
         h('div', { class: 'invoke-item-head' }, [
           h('span', { class: 'invoke-time' }, formatTime(entry.startedAt)),
@@ -57,20 +62,20 @@ export const RelayPage = defineComponent({
         { class: 'relay-page', style: { display: props.active ? '' : 'none' } },
         [
           h('section', { class: 'relay-page-header' }, [
-            h('h4', 'relay 调用日志（只读）'),
+            h('h4', t('relayPage.title')),
             props.runningCount > 0
-              ? h('p', { class: 'relay-page-running' }, `${String(props.runningCount)} 个调用执行中…`)
+              ? h('p', { class: 'relay-page-running' }, t('relayPage.running', { count: props.runningCount }))
               : null,
             props.terminated && props.runningCount > 0
               ? h(
                   'p',
                   { class: 'relay-page-terminated' },
-                  '已终止等待，执行锁已解除；后台调用仍会完成并记录在下方日志中。'
+                  t('relayPage.terminated')
                 )
               : null,
           ]),
           props.invokeLogs.length === 0
-            ? h('p', { class: 'relay-page-empty' }, '暂无调用记录。外部 MCP agent 经 relay 调用页面工具时，会在这里实时展示。数据源选择请前往「数据源设置」页。')
+            ? h('p', { class: 'relay-page-empty' }, t('relayPage.empty'))
             : h('ul', { class: 'invoke-list' }, [...props.invokeLogs].reverse().map(renderEntry)),
         ]
       );

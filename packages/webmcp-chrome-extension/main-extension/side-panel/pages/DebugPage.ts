@@ -3,6 +3,7 @@
 // 模板用 h() 渲染函数（MV3 扩展页 CSP 禁止 eval，运行时字符串编译会白屏，见 issues/001）。
 import { computed, defineComponent, h, ref, watch, type VNode } from 'vue';
 import { serializeToolResult, type PageToolMeta } from '../../../core/page-tools-bridge';
+import { t } from '../i18n';
 import { logEvent } from '../logger';
 import type { PageToolsClient } from '../panel-client';
 import {
@@ -53,7 +54,9 @@ export const DebugPage = defineComponent({
       } catch (error) {
         tools.value = [];
         selected.value = '';
-        executionError.value = `工具清单获取失败：${error instanceof Error ? error.message : String(error)}`;
+        executionError.value = t('debug.listFetchFailed', {
+          message: error instanceof Error ? error.message : String(error),
+        });
       } finally {
         refreshing.value = false;
       }
@@ -159,9 +162,9 @@ export const DebugPage = defineComponent({
       if (!selectedTool()) return null;
       const list = parameters.value;
       return h('section', { class: 'debug-params' }, [
-        h('h4', '参数说明'),
+        h('h4', t('debug.parameters')),
         list.length === 0
-          ? h('p', { class: 'debug-params-empty' }, '该工具无需参数（留空即视为 {}）')
+          ? h('p', { class: 'debug-params-empty' }, t('debug.noParams'))
           : h(
               'ul',
               { class: 'debug-params-list' },
@@ -173,13 +176,13 @@ export const DebugPage = defineComponent({
                     h(
                       'span',
                       { class: param.required ? 'badge-required' : 'badge-optional' },
-                      param.required ? '必填' : '可选'
+                      param.required ? t('debug.required') : t('debug.optional')
                     ),
                     param.hasDefault
                       ? h(
                           'span',
                           { class: 'debug-param-default' },
-                          `默认 ${JSON.stringify(param.defaultValue) ?? 'undefined'}`
+                          t('debug.defaultValue', { value: JSON.stringify(param.defaultValue) ?? 'undefined' })
                         )
                       : null,
                   ]),
@@ -188,7 +191,7 @@ export const DebugPage = defineComponent({
                     ? h(
                         'p',
                         { class: 'debug-param-enum' },
-                        `可选值：${param.enumValues.join(' / ')}`
+                        t('debug.enumValues', { values: param.enumValues.join(' / ') })
                       )
                     : null,
                 ])
@@ -201,7 +204,7 @@ export const DebugPage = defineComponent({
       const tool = selectedTool();
       return h('section', { class: 'debug-form' }, [
         h('label', [
-          h('span', '工具'),
+          h('span', t('debug.tool')),
           h(
             'select',
             {
@@ -212,7 +215,7 @@ export const DebugPage = defineComponent({
               },
             },
             [
-              tools.value.length === 0 ? h('option', { value: '' }, '（无可用工具）') : null,
+              tools.value.length === 0 ? h('option', { value: '' }, t('debug.noTools')) : null,
               ...tools.value.map((item) =>
                 h('option', { key: item.name, value: item.name }, item.name)
               ),
@@ -222,10 +225,10 @@ export const DebugPage = defineComponent({
         tool?.description ? h('p', { class: 'debug-desc' }, tool.description) : null,
         renderParameters(),
         h('label', [
-          h('span', '参数（JSON）'),
+          h('span', t('debug.args')),
           h('textarea', {
             rows: 5,
-            placeholder: '{"key": "value"}；留空视为 {}',
+            placeholder: t('debug.argsPlaceholder'),
             spellcheck: false,
             disabled: running.value || props.locked,
             value: argsText.value,
@@ -246,9 +249,9 @@ export const DebugPage = defineComponent({
               disabled: running.value || props.locked || selected.value.length === 0,
               onClick: () => void execute(),
             },
-            running.value ? '执行中…' : '执行'
+            running.value ? t('debug.running') : t('debug.execute')
           ),
-          h('button', { class: 'ghost', type: 'button', disabled: running.value || props.locked, onClick: formatArgs }, '格式化'),
+          h('button', { class: 'ghost', type: 'button', disabled: running.value || props.locked, onClick: formatArgs }, t('debug.format')),
           h(
             'button',
             {
@@ -257,9 +260,9 @@ export const DebugPage = defineComponent({
               disabled: running.value || props.locked || selected.value.length === 0,
               onClick: fillArgsTemplate,
             },
-            '填入参数模板'
+            t('debug.fillTemplate')
           ),
-          h('button', { class: 'ghost', type: 'button', disabled: running.value || props.locked, onClick: () => void refreshTools() }, 'tools刷新'),
+          h('button', { class: 'ghost', type: 'button', disabled: running.value || props.locked, onClick: () => void refreshTools() }, t('debug.refreshTools')),
         ]),
         // 连接刷新按钮（webmcp/relay）已迁至「数据源设置」页（2026-09-12 页面结构调整）
       ]);
@@ -274,33 +277,36 @@ export const DebugPage = defineComponent({
           h(
             'span',
             { class: run.failed ? 'badge-fail' : 'badge-ok' },
-            `${run.failed ? '失败' : '成功'} · ${run.elapsedMs}ms`
+            t('debug.resultBadge', {
+              state: run.failed ? t('common.state.fail') : t('common.state.ok'),
+              elapsed: run.elapsedMs,
+            })
           ),
         ]),
         h('pre', { class: 'debug-result-text' }, run.resultText),
         run.rawJson !== undefined
           ? h('details', [
-              h('summary', '原始 JSON'),
+              h('summary', t('debug.rawJson')),
               h('pre', { class: 'debug-result-json' }, run.rawJson),
             ])
           : null,
         run.failed
           ? null
-          : h('button', { type: 'button', onClick: () => sendToChat(run) }, '发送到对话（agent 继续分析）'),
+          : h('button', { type: 'button', onClick: () => sendToChat(run) }, t('debug.sendToChat')),
       ]);
     };
 
     const renderHistory = (): VNode | null => {
       if (history.value.length === 0) return null;
       return h('section', { class: 'debug-history' }, [
-        h('h4', `最近执行（${history.value.length}）`),
+        h('h4', t('debug.recentRuns', { count: history.value.length })),
         ...history.value.map((run, index) =>
           h('div', { class: 'debug-history-item', key: history.value.length - index }, [
             h('span', { class: ['debug-history-name', run.failed ? 'tool-failed' : ''] }, run.name),
             h('span', { class: 'debug-history-meta' }, `${run.elapsedMs}ms`),
             run.failed
               ? null
-              : h('button', { class: 'ghost', type: 'button', onClick: () => sendToChat(run) }, '发送到对话'),
+              : h('button', { class: 'ghost', type: 'button', onClick: () => sendToChat(run) }, t('debug.sendToChatShort')),
           ])
         ),
       ]);

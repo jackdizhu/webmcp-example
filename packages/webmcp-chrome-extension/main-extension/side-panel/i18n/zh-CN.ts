@@ -1,0 +1,201 @@
+// i18n 简体中文字典（键类型基准：MessageKey 以本文件为准，en-US 必须一一对应）。
+// 约定：占位符用 {name} 形态，t() 渲染时替换；键按「页面.区块.语义」分层命名。
+// 模板必须用 h() 渲染函数（MV3 扩展页 CSP 禁止运行时字符串编译，见 issues/001），
+// 因此 i18n 采用「模块级响应式 store + t() 直读」而非 vue-i18n 模板指令。
+export const zhCN = {
+  // ---- 通用 ----
+  'common.cancel': '取消',
+  'common.save': '保存',
+  'common.back': '返回',
+  'common.toolsCount': '{count} 个工具',
+  'common.tabLabel': '标签页 {id}',
+  'common.state.running': '执行中',
+  'common.state.ok': '成功',
+  'common.state.fail': '失败',
+
+  // ---- 顶栏 ----
+  'header.title': 'WebMCP 页面工具助手',
+  'header.settings': '设置',
+  'header.langTitle': '切换语言 / Switch language',
+
+  // ---- 页签栏 ----
+  'tab.chat': 'agent 对话',
+  'tab.debug': 'tools 调试',
+  'tab.relay': 'relay 调用',
+  'tab.datasource': '数据源设置',
+  'tab.a2a': '远程智能体（A2A）',
+  'tab.settings': '设置',
+  'tab.abort': '终止',
+  'phase.agent': 'agent 对话执行中',
+  'phase.relay': 'relay 调用执行中',
+
+  // ---- relay 状态栏 ----
+  'relayBar.state.connected': '已连接',
+  'relayBar.state.connecting': '连接中',
+  'relayBar.state.reconnecting': '重连中',
+  'relayBar.state.dormant': '休眠',
+  'relayBar.state.stopped': '已停止',
+  'relayBar.summary.connected': 'relay 已连接 · {count} 个源',
+  'relayBar.summary.connecting': 'relay 连接中 · {count} 个源',
+  'relayBar.summary.lnaBlocked': 'relay 被浏览器本地网络权限拦截 · 展开查看修复步骤',
+  'relayBar.summary.dormant': 'relay 休眠 · 未发现本机 relay',
+  'relayBar.summary.standby': 'relay 待机 · 未选中任何标签页',
+  'relayBar.noEndpoint': '未建立连接',
+
+  // ---- 对话页 ----
+  'chat.agentLabel': '智能体',
+  'chat.inspectPrompt': '查看提示词',
+  'chat.switchConfirm': '切换到「{name}」将开启新会话，当前对话历史将被清空。',
+  'chat.switchConfirmYes': '确认切换',
+  'chat.pending': 'agent 处理中…',
+  'chat.tracePending': '执行中…',
+  'chat.traceCollapse': '收起 ▲',
+  'chat.traceExpand': '展开 ▼',
+  'chat.emptyTitle': '两种方式验证页面的 WebMCP 工具：',
+  'chat.emptyChat': '对话 —— 与 agent 对话来发现并调用页面工具（需在「设置」中配置 API Key）；',
+  'chat.emptyDebug': '调试 —— 不经 LLM 手动执行工具并查看结果（无需 Key，入口在「设置」面板）。',
+  'chat.emptyExample': '例如："列出页面工具，并逐个调用验证返回"。',
+  'chat.composerPlaceholder': '例如：列出页面工具并调用 get_status 验证返回',
+  'chat.send': '发送',
+
+  // ---- App 层动态消息（pushUiMessage / notifyA2a）----
+  'msg.missingApiKey': '请先在「设置」页填写 API Key 后再开始对话。',
+  'msg.agentSwitched': '已切换到「{name}」，已开启新会话。',
+  'msg.promptHeader': '当前系统提示词（分层组装，含段来源标注）：\n\n{prompt}',
+  'msg.promptEmpty': '当前系统提示词为空，将使用内置默认提示词。',
+  'msg.settingsSaved': '设置已保存。',
+  'msg.settingsSavedConsole':
+    '设置已保存。控制台输出已开启：在侧边栏上右键 →「检查」打开控制台，用过滤框输入 traceId 可筛出该轮完整链路。',
+  'msg.a2aSyncFailed': '以下远程智能体的卡片抓取失败，对话中将不可用：{list}',
+  'msg.a2aSaveFailed': 'A2A 配置保存失败：{message}',
+  'msg.a2aTokenSaveFailed': '「{id}」的 Bearer Token 保存失败：{message}',
+
+  // ---- 调试页 ----
+  'debug.parameters': '参数说明',
+  'debug.noParams': '该工具无需参数（留空即视为 {}）',
+  'debug.required': '必填',
+  'debug.optional': '可选',
+  'debug.defaultValue': '默认 {value}',
+  'debug.enumValues': '可选值：{values}',
+  'debug.tool': '工具',
+  'debug.noTools': '（无可用工具）',
+  'debug.args': '参数（JSON）',
+  'debug.argsPlaceholder': '{"key": "value"}；留空视为 {}',
+  'debug.running': '执行中…',
+  'debug.execute': '执行',
+  'debug.format': '格式化',
+  'debug.fillTemplate': '填入参数模板',
+  'debug.refreshTools': 'tools刷新',
+  'debug.resultBadge': '{state} · {elapsed}ms',
+  'debug.rawJson': '原始 JSON',
+  'debug.sendToChat': '发送到对话（agent 继续分析）',
+  'debug.recentRuns': '最近执行（{count}）',
+  'debug.sendToChatShort': '发送到对话',
+  'debug.listFetchFailed': '工具清单获取失败：{message}',
+
+  // ---- relay 调用页 ----
+  'relayPage.title': 'relay 调用日志（只读）',
+  'relayPage.running': '{count} 个调用执行中…',
+  'relayPage.terminated': '已终止等待，执行锁已解除；后台调用仍会完成并记录在下方日志中。',
+  'relayPage.empty':
+    '暂无调用记录。外部 MCP agent 经 relay 调用页面工具时，会在这里实时展示。数据源选择请前往「数据源设置」页。',
+
+  // ---- 数据源页 ----
+  'ds.adjust': '调整数据源',
+  'ds.lockedHint': 'agent 对话或 relay 调用进行中，暂不可调整。',
+  'ds.picker.title': '数据源选择',
+  'ds.picker.globalSelection': '全局选择：已选 {count} 个标签页（agent / tools 调试 / relay 三端共用；不随切换页签变化）',
+  'ds.picker.empty': '暂无可选标签页',
+  'ds.picker.reset': '重置为当前活动页签（单选）',
+  'ds.summary.title': '连接状态',
+  'ds.summary.empty': '暂无 http(s) 标签页',
+  'ds.summary.stats': '已连接 {connected} 个源 · 已选 {selected} / {total} 个标签页',
+  'ds.actions.title': '连接刷新',
+  'ds.actions.hint': 'webmcp 连接 = 扩展 → 页面工具桥接；relay 连接 = 扩展 → 本机 relay 服务。重建期间状态以顶部状态栏为准。',
+  'ds.actions.webmcp': 'webmcp连接刷新',
+  'ds.actions.relay': 'relay连接刷新',
+  'ds.actions.rebuilding': '重建中…',
+
+  // ---- 设置页 ----
+  'settings.logsCount': '本地日志：{count} 条',
+  'settings.exportLogs': '导出日志',
+  'settings.clearLogs': '清空日志',
+  'settings.exported': '已导出 {name}',
+  'settings.noLogsToExport': '暂无日志可导出',
+  'settings.logsCleared': '日志已清空',
+  'settings.editConfig': '编辑配置',
+  'settings.lockedHint': 'agent 对话或 relay 调用进行中，暂不可编辑。',
+
+  // ---- 设置摘要（只读态）----
+  'settings.summary.title': '当前生效配置（已保存）',
+  'settings.summary.protocol': 'API 协议',
+  'settings.summary.model': '模型',
+  'settings.summary.maxHistoryTurns': '历史轮数上限',
+  'settings.summary.consoleOutput': '控制台输出',
+  'settings.summary.on': '开启',
+  'settings.summary.off': '关闭',
+  'settings.summary.notSet': '（未配置）',
+  'settings.summary.empty': '（空）',
+  'settings.summary.apiPathEmpty': '（空，发起对话时提示配置）',
+  'settings.summary.protocolOpenai': 'OpenAI 兼容（chat completions）',
+  'settings.summary.protocolAnthropic': 'Anthropic（Messages API）',
+  'settings.summary.dirtyHint': '表单有未保存的修改，以上为已保存生效值。',
+
+  // ---- 设置表单（编辑态）----
+  'settings.form.protocol': 'API 协议',
+  'settings.form.protocolHint': 'Anthropic 协议走 /v1/messages（x-api-key 鉴权，max_tokens 必填）。',
+  'settings.form.maxTokens': 'Max Tokens',
+  'settings.form.maxTokensHint': '单次回复的最大 token 数（默认 4096；仅 Anthropic 协议使用）。',
+  'settings.form.model': '模型',
+  'settings.form.systemPrompt': '系统提示词',
+  'settings.form.systemPromptPlaceholder': '留空则使用内置的页面工具验证助手提示词',
+  'settings.form.maxHistoryTurns': '历史对话轮数上限',
+  'settings.form.maxHistoryTurnsHint':
+    '每轮发送给 LLM 的历史对话轮数上限（默认 5，0 = 不裁剪）。裁剪以轮为单位，工具执行结果随所属轮一并裁剪，可显著降低 token 消耗。',
+  'settings.form.consoleOutput': '控制台输出（开启后日志同步打印到控制台，带 [traceId] 前缀；默认仅写本地日志）',
+  'settings.form.apiPathHint':
+    '请求路径，拼接在 Base URL 之后；清空后不回退默认路径，发起对话会提示：请配置apiPath。Anthropic 默认 /v1/messages，OpenAI 兼容默认 /chat/completions。',
+  'settings.form.busyHint': 'agent 对话或 relay 调用进行中，保存暂不可用。',
+  'settings.form.dirtyHint': '有未保存的修改：保存后生效，取消可还原。离开本页不会保存。',
+  'settings.form.keyLocalHint': 'Key 仅保存在本机 chrome.storage.local，不会进入代码仓库。',
+
+  // ---- A2A 页 ----
+  'a2a.hint':
+    '远程智能体（A2A）：为智能体绑定远程 A2A agent。启用者以 a2a__<id>__send_task 工具暴露给对话，agent 据卡片描述自动委派任务；绑定关系按智能体分别持久化。',
+  'a2a.editTarget': '编辑目标智能体',
+  'a2a.targetActive': '{name}（当前激活）',
+  'a2a.viewTarget': '当前展示「{name}」的绑定关系。',
+  'a2a.viewTargetNotActive': ' ⚠ 该智能体不是当前激活智能体：对话中生效的是激活智能体的绑定。',
+  'a2a.editItemTitle': '编辑绑定 · {id}',
+  'a2a.edit': '编辑',
+  'a2a.enabled': '已启用',
+  'a2a.disabled': '已停用',
+  'a2a.testing': '测试中…',
+  'a2a.testConnection': '测试连通',
+  'a2a.testFailed': '连通测试失败：{message}',
+  'a2a.cardUrl': '卡片地址',
+  'a2a.endpointOverride': '端点覆盖',
+  'a2a.noOverride': '未覆盖（默认用卡片接口地址）',
+  'a2a.tokenSet': '已配置',
+  'a2a.tokenUnset': '未配置',
+  'a2a.noBindings': '暂未绑定远程智能体。',
+  'a2a.noEditableAgent': '当前没有可编辑的智能体。',
+  'a2a.enableTitle': '启用后该远程智能体以 a2a__<id>__send_task 工具暴露给对话',
+  'a2a.remove': '删除',
+  'a2a.tokenPlaceholder': '{id} 的 bearer token（可留空）',
+  'a2a.endpointPlaceholder': 'JSON-RPC 端点覆盖（可选，留空 = 默认用卡片接口地址；如 Dify 填 http://host/e/<app>/a2a）',
+  'a2a.cardUrlError': '{id} 的卡片地址必须是合法的 HTTP(S) URL（通常为 /.well-known/agent-card.json）。',
+  'a2a.add.title': '新增绑定',
+  'a2a.add.idPlaceholder': 'ID（agentKey，仅字母/数字/下划线/连字符，创建后不可改）',
+  'a2a.add.cardUrlPlaceholder': 'Agent Card 地址（https://…/.well-known/agent-card.json）',
+  'a2a.add.endpointPlaceholder': 'JSON-RPC 端点覆盖（可选，默认用卡片接口地址；如 Dify 填 http://host/e/<app>/a2a）',
+  'a2a.add.tokenPlaceholder': 'Bearer Token（可留空）',
+  'a2a.add.idInvalid': 'ID 非法：仅允许字母、数字、下划线、连字符（创建后不可修改）。',
+  'a2a.add.cardUrlInvalid': '卡片地址必须是合法的 HTTP(S) URL（通常为 /.well-known/agent-card.json）。',
+  'a2a.add.noAgent': '当前没有激活的智能体。',
+  'a2a.add.idExists': 'ID「{id}」已存在（agentKey 创建后不可变，如需更换地址请直接编辑卡片地址）。',
+  'a2a.add.submit': '添加并启用',
+} as const;
+
+/** 全部消息键（以 zh-CN 为基准，en-US 必须一一对应，typecheck 把关）。 */
+export type MessageKey = keyof typeof zhCN;

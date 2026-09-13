@@ -1,6 +1,8 @@
 // 输入区：文本域（回车发送 / Shift+Enter 换行）与发送按钮。
 // 输入值经 v-model 双向绑定到 App（update:modelValue），发送动作回抛 send 事件。
+// 文案经全局 i18n store（t() 直读 locale ref），切换语言自动重渲染。
 import { defineComponent, h } from 'vue';
+import { t } from '../i18n';
 
 export const Composer = defineComponent({
   name: 'Composer',
@@ -17,7 +19,7 @@ export const Composer = defineComponent({
       h('footer', { class: 'composer' }, [
         h('textarea', {
           rows: 2,
-          placeholder: '例如：列出页面工具并调用 get_status 验证返回',
+          placeholder: t('chat.composerPlaceholder'),
           disabled: props.busy,
           value: props.modelValue,
           onInput: (event: Event) => {
@@ -38,7 +40,7 @@ export const Composer = defineComponent({
             disabled: props.busy || props.modelValue.trim().length === 0,
             onClick: () => emit('send'),
           },
-          '发送'
+          t('chat.send')
         ),
       ]);
   },

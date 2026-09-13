@@ -23,6 +23,7 @@ import {
 } from 'webmcp-agent-chat-core';
 import { createA2aToolHost, loadA2aTokens, saveA2aTokens } from './a2a-host';
 import { createAgentProfileStore } from './agent-profile-store';
+import { initLocale, joinList, t } from './i18n';
 import { createHostSkillSource, getBuiltinSkillSummary } from './skill-assets';
 import { composeHandoffMessage, type DebugRun } from './debugger-core';
 import {
@@ -123,7 +124,7 @@ export const App = defineComponent({
     watch(profileStore.activeAgent, (agent) => {
       void a2aHost.sync(agent).then((failures) => {
         if (failures.length > 0) {
-          notifyA2a('error', `以下远程智能体的卡片抓取失败，对话中将不可用：${failures.join('、')}`);
+          notifyA2a('error', t('msg.a2aSyncFailed', { list: joinList(failures) }));
         }
       });
     });
@@ -149,7 +150,7 @@ export const App = defineComponent({
         logEvent('info', 'chat', 'a2a_agents_updated', { agentId, count: refs.length });
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
-        notifyA2a('error', `A2A 配置保存失败：${message}`);
+        notifyA2a('error', t('msg.a2aSaveFailed', { message }));
         logEvent('error', 'chat', 'a2a_agents_update_failed', { message });
       }
     };
@@ -160,7 +161,7 @@ export const App = defineComponent({
         await saveA2aTokens({ ...a2aTokens });
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
-        notifyA2a('error', `「${agentId}」的 Bearer Token 保存失败：${message}`);
+        notifyA2a('error', t('msg.a2aTokenSaveFailed', { id: agentId, message }));
         logEvent('error', 'chat', 'a2a_token_save_failed', { message });
       }
       void a2aHost.sync(profileStore.activeAgent.value);
@@ -200,8 +201,8 @@ export const App = defineComponent({
     const locked = computed(() => busy.value || relayStore.runningCount.value > 0);
     /** 锁定期间 TabBar 展示的执行提示。 */
     const phaseLabel = computed(() => {
-      if (busy.value) return 'agent 对话执行中';
-      if (relayStore.runningCount.value > 0) return 'relay 调用执行中';
+      if (busy.value) return t('phase.agent');
+      if (relayStore.runningCount.value > 0) return t('phase.relay');
       return '';
     });
 
@@ -333,7 +334,7 @@ export const App = defineComponent({
       },
       onMissingApiKey: () => {
         setTab('settings');
-        pushUiMessage('assistant', '请先在「设置」页填写 API Key 后再开始对话。');
+        pushUiMessage('assistant', t('msg.missingApiKey'));
       },
       onMissingApiPath: () => {
         setTab('settings');
@@ -395,7 +396,7 @@ export const App = defineComponent({
       messages.value = [];
       pendingSwitchAgentId.value = '';
       await profileStore.setActive(id);
-      pushUiMessage('assistant', `已切换到「${profileStore.activeAgent.value?.name ?? id}」，已开启新会话。`);
+      pushUiMessage('assistant', t('msg.agentSwitched', { name: profileStore.activeAgent.value?.name ?? id }));
       logEvent('info', 'chat', 'agent_switched', { agentId: id });
     };
     const cancelSwitchAgent = (): void => {
@@ -409,8 +410,8 @@ export const App = defineComponent({
       pushUiMessage(
         'assistant',
         prompt.length > 0
-          ? `当前系统提示词（分层组装，含段来源标注）：\n\n${prompt}`
-          : '当前系统提示词为空，将使用内置默认提示词。'
+          ? t('msg.promptHeader', { prompt })
+          : t('msg.promptEmpty')
       );
       logEvent('info', 'chat', 'system_prompt_inspected');
     };
@@ -424,8 +425,8 @@ export const App = defineComponent({
       pushUiMessage(
         'assistant',
         settings.consoleOutput
-          ? '设置已保存。控制台输出已开启：在侧边栏上右键 →「检查」打开控制台，用过滤框输入 traceId 可筛出该轮完整链路。'
-          : '设置已保存。'
+          ? t('msg.settingsSavedConsole')
+          : t('msg.settingsSaved')
       );
       await refreshTools();
     };
@@ -434,6 +435,8 @@ export const App = defineComponent({
     // 状态与 export/clear handler，也不再用 watch(activeTab) 代刷——页面 watch(active) 自管。
 
     onMounted(async () => {
+      // i18n：先于一切 UI 消息组装（持久化语言 / navigator.language 回退）
+      await initLocale();
       await initLogger();
       logEvent('info', 'app', 'sidepanel_opened');
 
@@ -614,7 +617,12 @@ export const App = defineComponent({
           active: activeTab.value === 'settings',
           settings,
           busy: locked.value,
-          onSave: () => void persistSettings(),
+          // 表单编辑只落 SettingsForm 本地草稿（编辑态/只读态拆分）：保存时草稿合并进
+          // 基线 reactive 对象，再走既有 persistSettings 落盘 + setTab('chat') 流程
+          onSave: (draft: PanelSettings) => {
+            Object.assign(settings, draft);
+            void persistSettings();
+          },
         }),
       ]);
   },
