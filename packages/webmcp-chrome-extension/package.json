@@ -1,6 +1,6 @@
 {
   "name": "webmcp-chrome-extension",
-  "version": "1.2.1",
+  "version": "1.2.2",
   "description": "Chromium 扩展：在页面注入 WebMCP，并从隔离世界发现、调用页面暴露的工具",
   "keywords": [
     "ai-agents",
