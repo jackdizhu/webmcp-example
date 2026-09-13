@@ -1,124 +1,204 @@
 # webmcp-example
 
-基于 [WebMCP](https://webmachinelearning.github.io/webmcp/)（Web Model Context Protocol，W3C 草案）的示例工程。
+An example project built on [WebMCP](https://webmachinelearning.github.io/webmcp/) (Web Model Context Protocol, W3C draft).
 
-通过 `pnpm` 构建 TypeScript 单一仓库（monorepo），包含两个核心模块：
+A TypeScript monorepo managed by `pnpm`, consisting of four core modules:
 
-| 模块 | 类型 | 角色 |
+| Module | Type | Role |
 | ---- | ---- | ---- |
-| `packages/chrome-extension` | 浏览器插件端 | **agent 能力层**：发现、校验、执行、验证页面暴露的 WebMCP tools |
-| `packages/html-app` | Web 应用（SPA） | **工具提供层**：通过 `document.modelContext.registerTool()` 暴露结构化工具 |
+| `packages/webmcp-chrome-extension` | Chromium extension (MV3) | **Agent capability layer**: injects the WebMCP runtime into pages, discovers/validates/executes page-exposed tools from the isolated world; ships a side-panel agent chat (page tools + built-in tools + A2A remote agents) |
+| `packages/webmcp-html-app` | Web app (SPA) | **Tool provider layer**: exposes structured tools via `document.modelContext.registerTool()` (form filling, table query, etc.) |
+| `packages/webmcp-agent-chat-core` | TypeScript library | **Conversation domain logic**: tool-use loop, LLM protocol adapters (openai-compat / anthropic), turn orchestration, built-in agent profiles; zero UI, zero browser APIs |
+| `packages/webmcp-extension-relay` | Node.js local service | **Local MCP relay**: bridges browser WebMCP tools to local MCP clients over a localhost WebSocket (`ws://127.0.0.1:9333`, `webmcp.v1` subprotocol); the browser source is this extension |
 
-## 快速开始
+> 中文版文档见 [README-zh.md](README-zh.md)。
+
+## Quick Start
 
 ```bash
-pnpm install        # 安装依赖
-pnpm build          # 构建所有 package
-pnpm --filter <pkg> build   # 构建单个 package（chrome-extension / html-app）
+pnpm install        # install dependencies
+pnpm build          # build all packages
+pnpm dev            # parallel dev mode (watch all packages)
+pnpm typecheck      # full type check
+pnpm lint           # ESLint
+pnpm test           # unit tests (vitest)
+
+# build a single package
+pnpm --filter webmcp-chrome-extension build
+pnpm --filter @mcp-b/example-vanilla build
 ```
 
-## 文档
+The extension build output lands in `packages/webmcp-chrome-extension/dist/` — load it via "Load unpacked" on `chrome://extensions`.
 
-- [docs/ 技术文档](docs/README.md)：架构、快速开始、WebMCP 概念参考。
-- [rules/ 工程规则](rules/README.md)：语言与项目规范。
-- [AGENT.md](AGENT.md)：AI 代理工作指引。
+## Documentation
 
-## 核心概念：页面主世界与隔离世界
+- [docs/ technical docs](docs/README.md): architecture, quick start, design docs and concept reference.
+- [docs/architecture.md](docs/architecture.md): overall architecture design.
+- [rules/ engineering rules](rules/README.md): language and project conventions.
+- [AGENT.md](AGENT.md): AI agent working guide.
+- [packages/webmcp-chrome-extension/docs/](packages/webmcp-chrome-extension/docs/): A2A end-to-end case screenshots (see "Case Study" below).
 
-Chrome 扩展的 content script 运行在与网页**互相隔离的 JavaScript 环境**中。同一个标签页里存在两个世界，它们**共享同一个 DOM，但各自拥有独立的 JavaScript 全局作用域**：
+## Architecture
 
-| 维度 | 页面主世界（MAIN world） | 隔离世界（Isolated world，默认） |
-| ---- | ---- | ---- |
-| 是什么 | 网页自身的 JS 环境（页面 `<script>`、框架代码） | Chrome 为 content script 创建的独立 JS 环境 |
-| 全局对象 | 页面原生 `window` / `document` | 独立副本（隔离的 JS 堆） |
-| DOM | 共享 | 共享（改 DOM 双方可见） |
-| 页面 JS 变量/函数 | 直接访问 | **不可见**（不能直接读写） |
-| `chrome.*` 特权 API | **不可用** | 可用（storage、runtime 消息等受限子集） |
-| 互相通信方式 | 仅 `window.postMessage` / DOM 事件等序列化通道 | 同左 |
-| 注入方式 | manifest `content_scripts` 声明 `"world": "MAIN"` | content script 默认世界 |
-
-这样设计出于安全考虑：页面脚本不可信，若与扩展共享 JS 环境，页面可篡改扩展逻辑；而特权 API 也绝不能暴露给页面。代价是扩展无法直接操作页面的 JS 状态，必须经消息通道中转。
-
-### 本项目的落点
-
-![WebMCP 两端架构与通信通道](docs/images/worlds-architecture.svg)
-
-- **页面主世界**：`shell/main-world.ts` 在 `document_start` 以 MAIN world 注入 `@mcp-b/global`，安装 `document.modelContext`（优先原生 WebMCP，缺失时降级 polyfill）；`html-app` 业务代码在此调用 `modelContext.registerTool()` 注册工具，工具的 `execute` 闭包也在主世界执行（可直接访问页面 DOM 与业务状态），并扮演 MCP Server（监听 channel `mcp-default` 的 window message）。
-- **隔离世界**：`core/content-script.ts` 建立 MCP Client（`TabClientTransport` + JSON-RPC 会话），`core/page-tools-bridge.ts` 把已连接的 Client 通过 `chrome.runtime` 长连接暴露给扩展其他上下文。此世界可用特权 API，但看不到页面 JS。
-- **扩展页面**：侧边栏 `panel-client.ts` 经 `chrome.tabs.connect(tabId, { name: 'webmcp-page-tools' })` 连接到**活动标签页**的桥接，发送轻量 `listTools` / `callTool` 请求，并在切换标签页时自动跟随重连。
-
-两条通道的分工（注意：扩展页面 → content script 必须用 `tabs.connect`，官方文档明确 `runtime.connect` 只在扩展进程上下文间投递，到不了 content script）：
-
-| 通道 | 连接的上下文 | 承载协议 |
-| ---- | ---- | ---- |
-| ① `window.postMessage`（channel `mcp-default`） | 隔离世界 ↔ 页面主世界 | 标准 MCP JSON-RPC（`tools/list`、`tools/call`） |
-| ② `chrome.tabs.connect(tabId)`（port name `webmcp-page-tools`） | 扩展页面（侧栏） ↔ 活动标签页的 content script | 扩展内部轻量请求-响应协议（工具 schema 原样透传） |
-
-### 连接建立时序
-
-![WebMCP 连接建立时序](docs/images/connection-sequence.svg)
-
-1. 扩展在 `document_start` 注入运行时，安装 `document.modelContext`；
-2. 页面调用 `modelContext.registerTool(get_status)` 注册工具；
-3. content script 的 `TabClientTransport` 经 `window.postMessage` 发送 `mcp-check-ready` 探测；
-4. polyfill 应答 `mcp-server-ready`，完成 JSON-RPC `initialize` 握手（`TabClientTransport` 探测为一次性，故 `connectWithRetry` 以 10s 超时 × 5 次兜底）；
-5. 握手成功即注册 `startPageToolsBridge`，监听 `runtime.onConnect`（把侧栏可连接窗口最早化）；
-6. 侧栏 `chrome.tabs.connect(tabId)` 接入活动标签页，工具调用沿「侧栏 → Port → 桥接 → MCP Client → postMessage → polyfill → `execute`」原路返回。
-
-### Mermaid 源图（供无法读取图片的大模型消费）
-
-与上方两张 SVG 图等价，以下为文本版：
-
-架构与双通道：
+### Monorepo Module Architecture
 
 ```mermaid
 flowchart TB
-    PANEL["侧边栏（扩展页面）<br/>panel-client 发起方"]
-    subgraph TAB["浏览器标签页：同一页面，两个隔离的 JS 世界"]
-        subgraph MAIN["MAIN world（页面主世界）"]
-            APP["html-app 业务代码<br/>modelContext.registerTool(get_status)"]
-            SERVER["MCP Server（polyfill / @mcp-b/global）<br/>监听 window message · channel: mcp-default"]
-        end
-        subgraph ISO["隔离世界（content script）"]
-            BRIDGE["page-tools-bridge<br/>监听 runtime.onConnect"]
-            CLIENT["MCP Client<br/>TabClientTransport · JSON-RPC 会话"]
-        end
+    subgraph EXT["packages/webmcp-chrome-extension (MV3 extension · agent capability layer)"]
+        PANEL["Side panel · 6 tabs<br/>Chat / Tools debug / Relay / Data source / A2A agents / Settings"]
+        SW["Service Worker<br/>tab-source-manager (single source of truth for data sources)<br/>built-in tools chrome_extension_*"]
+        CS["content script (isolated world)<br/>MCP Client + page-tools-bridge"]
+        MW["shell/main-world.ts (MAIN world injection)<br/>installs document.modelContext"]
+        PANEL -- "chrome.tabs.connect" --> SW
+        SW -- "tabs.connect (webmcp-page-tools)" --> CS
+        CS -- "window.postMessage (mcp-default)" --> MW
     end
-    PANEL -- "通道② chrome.tabs.connect(tabId)（webmcp-page-tools）<br/>listTools / callTool" --> BRIDGE
-    BRIDGE -- "代理请求" --> CLIENT
-    APP -- "registerTool" --> SERVER
-    CLIENT <-- "通道① window.postMessage（mcp-default）<br/>MCP JSON-RPC 双向" --> SERVER
+    subgraph APP["packages/webmcp-html-app (tool provider SPA)"]
+        TOOLS["Page tools<br/>modelContext.registerTool"]
+    end
+    MW --- TOOLS
+    CORE["packages/webmcp-agent-chat-core<br/>tool-use loop · LLM adapters · agent profiles"]
+    CORE -. "consumed by the side-panel chat" .-> PANEL
+    RELAY["packages/webmcp-extension-relay<br/>local MCP relay"]
+    SW -- "WebSocket ws://127.0.0.1:9333 (webmcp.v1)<br/>one connection per selected tab" --> RELAY
 ```
 
-连接建立时序：
+### Inside the Browser: MAIN World vs Isolated World
+
+![WebMCP two-world architecture and channels](docs/images/worlds-architecture.svg) <!-- labels in Chinese; English equivalent in the Mermaid source above/below -->
+
+Chrome extension content scripts run in a JavaScript environment **isolated from the web page**. Each tab hosts two worlds that **share the same DOM but keep separate JavaScript global scopes**:
+
+| Dimension | Page MAIN world | Isolated world (default) |
+| ---- | ---- | ---- |
+| What it is | The page's own JS environment (page `<script>`, framework code) | A separate JS environment Chrome creates for content scripts |
+| Global object | The page's native `window` / `document` | An independent copy (isolated JS heap) |
+| DOM | Shared | Shared (DOM changes are visible to both) |
+| Page JS variables/functions | Direct access | **Invisible** (no direct read/write) |
+| `chrome.*` privileged APIs | **Unavailable** | Available (limited subset: storage, runtime messaging, etc.) |
+| Communication | Only serialized channels: `window.postMessage` / DOM events | Same |
+| Injection | manifest `content_scripts` with `"world": "MAIN"` | Default world for content scripts |
+
+This is a security boundary: page scripts are untrusted — sharing a JS realm with the extension would let the page tamper with extension logic, and privileged APIs must never leak to the page. The cost: the extension cannot touch the page's JS state directly and must go through message channels.
+
+### Where This Project Fits
+
+- **Page MAIN world**: `packages/webmcp-chrome-extension/shell/main-world.ts` injects `@mcp-b/global` at `document_start` in the MAIN world and installs `document.modelContext` (native WebMCP when available, polyfill fallback otherwise); the `webmcp-html-app` business code calls `modelContext.registerTool()` here, tool `execute` closures run in this world (direct access to page DOM and business state), and it acts as the MCP Server (listening for window messages on channel `mcp-default`).
+- **Isolated world**: `packages/webmcp-chrome-extension/core/content-script.ts` sets up the MCP Client (`TabClientTransport` + JSON-RPC session); `core/page-tools-bridge.ts` exposes the connected Client to other extension contexts over a long-lived `chrome.runtime` connection. This world can use privileged APIs but cannot see page JS.
+- **Extension pages**: the side panel `main-extension/side-panel/panel-client.ts` connects via `chrome.tabs.connect(tabId, { name: 'webmcp-page-tools' })` to the bridge of the **selected tab** (selection is managed centrally by the Service Worker's `tab-source-manager`, the single source of truth for data sources), sending lightweight `listTools` / `callTool` requests.
+
+Division of labor across the channels (note: extension page → content script must use `tabs.connect`; per the official docs, `runtime.connect` is only delivered among extension process contexts and never reaches content scripts):
+
+| Channel | Contexts connected | Protocol |
+| ---- | ---- | ---- |
+| ① `window.postMessage` (channel `mcp-default`) | isolated world ↔ page MAIN world | standard MCP JSON-RPC (`tools/list`, `tools/call`) |
+| ② `chrome.tabs.connect(tabId)` (port name `webmcp-page-tools`) | extension page (side panel) ↔ selected tab's content script | lightweight extension-internal request-response protocol (tool schemas passed through as-is) |
+| ③ WebSocket (`webmcp.v1` subprotocol) | Service Worker (`core/relay-source-client.ts`) ↔ local relay | relay source model: hello/tools reporting, tool-call dispatch (one connection per selected tab) |
+
+## Interaction Flow: Connection Establishment Sequence
+
+![WebMCP connection establishment sequence](docs/images/connection-sequence.svg) <!-- labels in Chinese; English equivalent in the Mermaid source below -->
 
 ```mermaid
 sequenceDiagram
     autonumber
-    participant MW as 页面主世界（@mcp-b/global / MCP Server）
-    participant CS as 隔离世界（content script）
-    participant SP as 侧边栏（扩展页面）
+    participant MW as Page MAIN world (@mcp-b/global / MCP Server)
+    participant CS as Isolated world (content script)
+    participant SP as Side panel (extension page)
 
-    Note over MW: document_start 注入运行时，安装 document.modelContext
-    MW->>MW: html-app 调用 modelContext.registerTool(get_status)
-    CS->>MW: mcp-check-ready（window.postMessage 探测）
+    Note over MW: inject runtime at document_start, install document.modelContext
+    MW->>MW: page calls modelContext.registerTool()
+    CS->>MW: mcp-check-ready (window.postMessage probe)
     MW-->>CS: mcp-server-ready
-    CS->>MW: JSON-RPC initialize（connectWithRetry 10s×5 兜底）
-    MW-->>CS: 握手完成，MCP 会话建立
-    CS->>CS: startPageToolsBridge 监听 runtime.onConnect
-    SP->>CS: chrome.tabs.connect（tabId, name: webmcp-page-tools）
-    SP->>CS: listTools / callTool 请求（携带自增 id）
-    CS->>MW: 代理为 MCP tools/list / tools/call
-    MW->>MW: 执行工具 execute（页面主世界内）
-    MW-->>CS: JSON-RPC 响应
-    CS-->>SP: 响应按 id 匹配，原路返回
+    CS->>MW: JSON-RPC initialize (connectWithRetry 10s × 5 fallback)
+    MW-->>CS: handshake complete, MCP session established
+    CS->>CS: startPageToolsBridge listens on runtime.onConnect
+    SP->>CS: chrome.tabs.connect (tabId, name: webmcp-page-tools)
+    SP->>CS: listTools / callTool requests (auto-increment id)
+    CS->>MW: proxied as MCP tools/list / tools/call
+    MW->>MW: run tool execute (inside the page MAIN world)
+    MW-->>CS: JSON-RPC response
+    CS-->>SP: response matched by id, returned along the same path
 ```
 
-## 上游参考（git 子模块，只读）
+1. The extension injects the runtime at `document_start` and installs `document.modelContext`;
+2. The page registers tools via `modelContext.registerTool()`;
+3. The content script's `TabClientTransport` sends an `mcp-check-ready` probe over `window.postMessage`;
+4. The polyfill answers `mcp-server-ready` and the JSON-RPC `initialize` handshake completes (`TabClientTransport` probes only once, so `connectWithRetry` backs it off with 10s timeout × 5 attempts);
+5. On success it registers `startPageToolsBridge`, listening on `runtime.onConnect` (opening the side-panel connection window as early as possible);
+6. The side panel `chrome.tabs.connect(tabId)` connects to the selected tab; tool calls travel "side panel → Port → bridge → MCP Client → postMessage → polyfill → `execute`" and responses return along the same path.
 
-- `git-source/webmcp-tools`：GoogleChromeLabs 的 WebMCP 工具集合。
-- `git-source/npm-packages`：WebMCP-org 的 `@mcp-b/*` npm 包与文档。
+## Core Data Flow: Side-Panel Agent Chat Tool Calls
 
-## 许可
+Data flow of a single user request in the side-panel chat. The agent (default `tool-debug`; switchable to `multi-turn-loop` / `a2a-analyst`) is driven by `webmcp-agent-chat-core`'s tool-use loop and can orchestrate three kinds of tools:
+
+```mermaid
+flowchart LR
+    U["User input (chat tab)"] --> LOOP["agent-chat-core<br/>tool-use loop + turn orchestration"]
+    LOOP -- "chat/completions or messages" --> LLM["Remote LLM<br/>(openai-compat / anthropic)"]
+    LLM -- "tool_calls" --> LOOP
+    LOOP --> R{"Tool routing (App composition chain)"}
+    R -- "Page tools<br/>tab&lt;id&gt;__*" --> PT["tabs.connect → page-tools-bridge<br/>→ MCP Client → MAIN-world execute"]
+    R -- "Built-in tools<br/>chrome_extension_*" --> BT["Executed directly in the Service Worker<br/>(e.g. document info reading)"]
+    R -- "Remote agents<br/>a2a__&lt;id&gt;__send_task" --> A2A["HTTP JSON-RPC<br/>message/send → remote A2A agent"]
+    PT -- "CallToolResult" --> LOOP
+    BT -- "CallToolResult" --> LOOP
+    A2A -- "task result / artifacts" --> LOOP
+    LOOP -- "turns advance until the final answer" --> U
+    LOOP -. "session & binding persistence" .-> STORE[("chrome.storage.local<br/>agentProfiles · a2aTokens")]
+```
+
+Key points:
+
+- **Unified page-tool naming**: all page tools synthesized in the side panel get a `tab<id>__` prefix (no collisions across tabs); calls are delivered under the original name via the routing table.
+- **Built-in tools**: `chrome_extension_*` execute directly inside the extension process (e.g. page document info reading); results are uniformly MCP `CallToolResult`.
+- **A2A remote agents**: bindings are managed per agent in the "A2A agents" tab (card URL / endpoint override / Bearer token) and exposed in chat as `a2a__<id>__send_task`; destructive actions (e.g. delete) use an inline two-step confirmation.
+- **Data-source selection**: the SW's `tab-source-manager` is the single source of truth (storage key `relayTabSelection`), reset to the active tab when the side panel reopens; no SW → relay WebSocket is opened for unselected tabs.
+
+## Side-Panel Tabs
+
+| Tab | File (`main-extension/side-panel/pages/`) | Responsibility |
+| ---- | ---- | ---- |
+| Agent chat | `ChatPage.ts` | Built-in agent chat, tool-call trace display (TOOL / A2A badges) |
+| Tools debug | `DebugPage.ts` | Browse tool lists and invoke a single tool manually |
+| Relay | `RelayPage.ts` | Local relay connection status and call observability |
+| Data source | `DataSourcePage.ts` | Pick the tab feeding the relay / side panel (selected item pinned on top) |
+| A2A agents | `A2aPage.ts` | A2A binding management: list / add / edit (connection test, two-step delete) |
+| Settings | `SettingsPage.ts` | LLM connection config (read-only summary + edit form), log export/clear |
+
+## Case Study: A2A Agent End-to-End Demo
+
+Screenshots live in [packages/webmcp-chrome-extension/docs/](packages/webmcp-chrome-extension/docs/) (labels in the UI are in Chinese), demonstrating the full loop of "page tools fetch data → A2A delegates to a remote agent → results flow back".
+
+**1. Composite task** ([agent-a2a-prompt.png](packages/webmcp-chrome-extension/docs/agent-a2a-prompt.png))
+
+![A2A case: composite task](packages/webmcp-chrome-extension/docs/agent-a2a-prompt.png)
+
+The user asks the "A2A agent" to query an order table (page tools) and delegate the table data to a "data-analysis agent" (remote A2A agent) for analysis.
+
+**2. Tool orchestration trace** ([agent-a2a-tools.png](packages/webmcp-chrome-extension/docs/agent-a2a-tools.png))
+
+![A2A case: tool orchestration trace](packages/webmcp-chrome-extension/docs/agent-a2a-tools.png)
+
+The agent calls `tab<id>__get_status`, `tab<id>__form_get_schema`, `chrome_extension_get_document_info`, `tab<id>__form_get_values`, `tab<id>__form_fill_fields`, `tab<id>__query_table_data` to fetch and backfill page data, then invokes the remote agent `order-analysis-customer-service` under the **A2A badge**.
+
+**3. A2A protocol request** ([agent-a2a-send.png](packages/webmcp-chrome-extension/docs/agent-a2a-send.png))
+
+![A2A case: protocol request](packages/webmcp-chrome-extension/docs/agent-a2a-send.png)
+
+The JSON-RPC `message/send` request payload in the network panel: `messageId` carries the `a2a-msg-` prefix, and `parts` carries the delegation instructions as a text part.
+
+**4. Protocol response and final result** ([agent-a2a-result.png](packages/webmcp-chrome-extension/docs/agent-a2a-result.png))
+
+![A2A case: protocol response and result](packages/webmcp-chrome-extension/docs/agent-a2a-result.png)
+
+The remote agent replies with a `role: agent` message; the chat tab summarizes the order-analysis table with data actually backfilled by the tools (warehouse, salesperson and status all come from real page data, not fabricated).
+
+## Upstream References (git submodules, read-only)
+
+- `git-source/webmcp-tools`: WebMCP tool collection by GoogleChromeLabs.
+- `git-source/npm-packages`: `@mcp-b/*` npm packages and docs by WebMCP-org.
+
+## License
 
 MIT
