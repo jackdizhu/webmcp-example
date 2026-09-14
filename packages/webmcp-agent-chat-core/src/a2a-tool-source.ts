@@ -28,7 +28,7 @@ export interface A2aToolResult {
   isError: boolean;
 }
 
-/** 单个远程 agent 的运行配置（宿主从 profile.a2aAgents + settings token 解析而来）。 */
+/** 单个远程 agent 的运行配置（宿主从全局 a2aConfig + a2aTokens 存储解析而来，2026-09-14 解耦）。 */
 export interface A2aAgentConfig {
   /** agentKey：稳定不可变（决策 3），同时是工具名组成段，仅允许 [a-zA-Z0-9_-]。 */
   id: string;

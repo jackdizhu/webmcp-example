@@ -9,7 +9,6 @@
 import { defineComponent, h, ref, watch, type PropType, type VNode } from 'vue';
 import { isHttpUrl, validateA2aAgentId, type AgentA2aRef } from 'webmcp-agent-chat-core';
 import { t } from '../../i18n';
-import type { A2aBindingTargetAgent } from './A2aBindingList';
 
 /** 统一提交载荷：endpointOverride 空串 = 未覆盖（回落卡片接口地址）。 */
 export interface A2aFormPayload {
@@ -25,8 +24,8 @@ export const A2aBindingForm = defineComponent({
   props: {
     /** 表单形态：add = 新增绑定；edit = 编辑既有绑定。 */
     mode: { type: String as PropType<'add' | 'edit'>, required: true },
-    /** add 模式：编辑目标智能体（重复 id 校验用；null = 无目标，提交时报错）。 */
-    targetAgent: { type: Object as PropType<A2aBindingTargetAgent | null>, default: null },
+    /** add 模式：现有配置草稿（重复 id 校验用）。 */
+    refs: { type: Array as PropType<AgentA2aRef[]>, default: () => [] },
     /** edit 模式：待编辑条目基线（本组件只读不直改；add 模式不传）。 */
     item: { type: Object as PropType<AgentA2aRef>, default: null },
     /** edit 模式：基线 token（App a2aTokens 快照中该条目的当前值）。 */
@@ -75,12 +74,8 @@ export const A2aBindingForm = defineComponent({
           error.value = t('a2a.add.idInvalid');
           return;
         }
-        const agent = props.targetAgent;
-        if (agent === null) {
-          error.value = t('a2a.add.noAgent');
-          return;
-        }
-        if (agent.a2aAgents.some((ref) => ref.id === id)) {
+        const agent = props.refs;
+        if (agent.some((ref) => ref.id === id)) {
           error.value = t('a2a.add.idExists', { id });
           return;
         }

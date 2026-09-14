@@ -1,6 +1,6 @@
-// A2A 绑定列表组件（components/a2a/，P0）：目标智能体绑定关系的「只读卡片」展示 + 行级操作。
+// A2A 绑定列表组件（components/a2a/，2026-09-14 解耦改造）：全局 A2A 配置的「只读卡片」展示 + 行级操作。
 // 行级操作（2026-09-13 页面拆分改造）：测试连通（只读探测）/ 编辑（进入单条编辑子页面）/
-// 删除（两步确认后生效，整表替换持久化）；新增走「新增绑定」子页面（空态内嵌 CTA，emit('add')）。
+// 删除（两步确认后生效，宿主落草稿）；新增走「新增绑定」子页面（空态内嵌 CTA，emit('add')）。
 // 页内 UI 优化（2026-09-13 方案二 A2-A6）：
 // - A2 卡片头只留 id + 状态徽章，操作独立成行 .a2a-item-actions（消除 320px 溢出）
 // - A3 删除钮 danger-ghost 红描边 + 两步确认（3s 超时还原，页内 inline 无弹窗）
@@ -12,13 +12,6 @@
 import { defineComponent, h, onUnmounted, ref, type PropType, type VNode } from 'vue';
 import type { AgentA2aRef } from 'webmcp-agent-chat-core';
 import { t } from '../../i18n';
-
-/** 编辑目标智能体的绑定快照（结构对齐 profile 的 a2aAgents 载体）。 */
-export interface A2aBindingTargetAgent {
-  id: string;
-  name: string;
-  a2aAgents: AgentA2aRef[];
-}
 
 /** 单条连通测试结果（kind 决定视觉分级：ok = 成功绿 / err = 失败红）。 */
 interface TestResult {
@@ -32,8 +25,8 @@ const CONFIRM_TIMEOUT_MS = 3000;
 export const A2aBindingList = defineComponent({
   name: 'A2aBindingList',
   props: {
-    /** 编辑目标智能体（含其绑定列表；null = 无可展示目标，展示空态）。 */
-    agent: { type: Object as PropType<A2aBindingTargetAgent | null>, required: true },
+    /** 全局 A2A 配置草稿（宿主页下发；只读展示 + 行级操作上报）。 */
+    refs: { type: Array as PropType<AgentA2aRef[]>, required: true },
     /** agentId → bearer token（App a2aTokens 响应式快照；只读展示徽章）。 */
     a2aTokens: { type: Object as PropType<Record<string, string>>, required: true },
     /** 连通测试（App 委托 a2a-host.testConnection），resolve = 成功文案 / reject = 失败文案。 */
@@ -45,7 +38,7 @@ export const A2aBindingList = defineComponent({
   emits: {
     /** 请求编辑指定绑定（宿主进入单条编辑子页面）。 */
     edit: (id: string) => id.length > 0,
-    /** 请求删除指定绑定（两步确认后触发，宿主整表替换并持久化）。 */
+    /** 请求删除指定绑定（两步确认后触发，宿主落草稿待显式保存）。 */
     remove: (id: string) => id.length > 0,
     /** 空态 CTA：请求进入「新增绑定」子页面。 */
     add: null,
@@ -117,7 +110,7 @@ export const A2aBindingList = defineComponent({
       h('span', { class: `a2a-meta-badge a2a-meta-badge-${tone}` }, text);
 
     return () => {
-      const rows: VNode[] = (props.agent?.a2aAgents ?? []).map((refItem) => {
+      const rows: VNode[] = (props.refs ?? []).map((refItem) => {
         const tokenSet = (props.a2aTokens[refItem.id] ?? '').length > 0;
         const armed = confirmRemoveId.value === refItem.id;
         const result = testResults.value[refItem.id];

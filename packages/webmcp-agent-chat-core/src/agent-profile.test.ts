@@ -13,7 +13,6 @@ import {
   type AgentProfilesState,
   type AgentRules,
   type AgentSkillRef,
-  type AgentA2aRef,
 } from './agent-profile';
 import type { LlmConfig } from './llm-client';
 
@@ -24,7 +23,6 @@ const agent = (overrides: Partial<AgentProfile> = {}): AgentProfile => ({
   rules: { inheritGlobal: true, items: [{ id: 'r1', text: '优先调用页面工具。' }] },
   skills: [],
   mcps: [],
-  a2aAgents: [],
   ...overrides,
 });
 
@@ -38,8 +36,6 @@ const baseConfig: LlmConfig = {
 
 /** 非法技能引用（enabled 非布尔）：经 unknown 断言绕过编译期检查，验证运行时校验。 */
 const badSkillRef = { id: 's', enabled: 'x' } as unknown as AgentSkillRef;
-/** 非法 A2A 引用（enabled 非布尔）：同上。 */
-const badA2aRef = { id: 'd', cardUrl: 'https://x.example.com/card.json', enabled: 1 } as unknown as AgentA2aRef;
 /** 非法 rules（inheritGlobal 非布尔）：同上。 */
 const badRules = { inheritGlobal: 'yes', items: [] } as unknown as AgentRules;
 
@@ -180,7 +176,6 @@ describe('migrateLegacySettings', () => {
           rules: { inheritGlobal: true, items: [] },
           skills: [],
           mcps: [],
-          a2aAgents: [],
         },
       ],
       activeAgentId: LEGACY_DEFAULT_AGENT_ID,
@@ -207,7 +202,6 @@ describe('migrateLegacySettings', () => {
           rules: { inheritGlobal: true, items: [] },
           skills: [{ id: 'page-tools-guide', enabled: true }],
           mcps: [],
-          a2aAgents: [],
         },
         agent({ id: 'my-custom', name: '我的自定义' }),
       ],
@@ -253,14 +247,12 @@ describe('migrateLegacySettings', () => {
     expect(migrateLegacySettings({ systemPrompt: '旧提示' }, existing)).toBe(existing);
   });
 
-  it('内置条目上的用户数据在原位刷新时保留（a2aAgents / llmOverride 不被清空）', () => {
+  it('内置条目上的用户数据在原位刷新时保留（llmOverride 不被清空）', () => {
     const [toolDebug] = createBuiltinAgentProfiles();
-    const a2aRefs = [{ id: 'dify_app', cardUrl: 'http://localhost/a/card.json', enabled: true, endpointOverride: 'http://localhost/e/app/a2a' }];
     const existing: AgentProfilesState = {
       agents: [
         {
           ...toolDebug!,
-          a2aAgents: a2aRefs,
           llmOverride: { model: 'my-model' },
         },
       ],
@@ -269,7 +261,6 @@ describe('migrateLegacySettings', () => {
     const state = migrateLegacySettings({ systemPrompt: '' }, existing);
     const refreshed = state.agents.find((item) => item.id === 'tool-debug');
     expect(refreshed).toBeDefined();
-    expect(refreshed!.a2aAgents).toEqual(a2aRefs);
     expect(refreshed!.llmOverride).toEqual({ model: 'my-model' });
   });
 
@@ -277,7 +268,7 @@ describe('migrateLegacySettings', () => {
     const existing: AgentProfilesState = {
       agents: createBuiltinAgentProfiles().map((builtin) =>
         builtin.id === 'tool-debug'
-          ? { ...builtin, a2aAgents: [{ id: 'x', cardUrl: 'https://x/card.json', enabled: false }] }
+          ? { ...builtin, llmOverride: { model: 'my-model' } }
           : builtin
       ),
       activeAgentId: 'tool-debug',
@@ -323,19 +314,21 @@ describe('validateAgentProfilesState', () => {
     ['agent.id 为空串', { agents: [{ ...agent(), id: '' }], activeAgentId: 'a' }, 'agent.id'],
     ['rules.inheritGlobal 非布尔', { agents: [agent({ rules: badRules })], activeAgentId: 'a' }, 'inheritGlobal'],
     ['skills 条目非法', { agents: [agent({ skills: [badSkillRef] })], activeAgentId: 'a' }, 'skills'],
-    ['a2aAgents 条目非法', { agents: [agent({ a2aAgents: [badA2aRef] })], activeAgentId: 'a' }, 'a2aAgents'],
   ])('非法状态 %s 抛错（含 %s）', (_label, value, reason) => {
     expect(() => validateAgentProfilesState(value)).toThrow(new RegExp(reason));
   });
 
-  it('a2aAgents 合法引用通过校验；内置档案默认带空 a2aAgents', () => {
-    const state: AgentProfilesState = {
-      agents: [agent({ a2aAgents: [{ id: 'doc', cardUrl: 'https://a2a.example.com/card.json', enabled: true }] })],
+  it('存量数据携带历史 a2aAgents 字段时宽容放行（解耦后按未知字段忽略，迁移由宿主完成）', () => {
+    const legacyWithA2a = {
+      agents: [
+        {
+          ...agent(),
+          // 历史字段：解耦后 AgentProfile 不再声明，校验不得因此拒绝（否则会触发重建清库）
+          a2aAgents: [{ id: 'doc', cardUrl: 'https://a2a.example.com/card.json', enabled: true }],
+        },
+      ],
       activeAgentId: 'page-qa',
     };
-    expect(validateAgentProfilesState(structuredClone(state))).toEqual(state);
-    for (const builtin of createBuiltinAgentProfiles()) {
-      expect(builtin.a2aAgents).toEqual([]);
-    }
+    expect(validateAgentProfilesState(structuredClone(legacyWithA2a))).toEqual(legacyWithA2a);
   });
 });
