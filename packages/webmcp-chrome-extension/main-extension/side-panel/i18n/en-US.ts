@@ -66,7 +66,8 @@ export const enUS: Record<import('./zh-CN').MessageKey, string> = {
     'Settings saved. Console output is on: right-click the side panel → "Inspect" to open the console, then type a traceId in the filter box to view the full chain of that turn.',
   'msg.a2aSyncFailed': 'Failed to fetch cards for these remote agents; they will be unavailable in chat: {list}',
   'msg.a2aSaveFailed': 'Failed to save A2A configuration: {message}',
-  'msg.a2aTokenSaveFailed': 'Failed to save the Bearer Token for "{id}": {message}',
+  'msg.a2aConfigSaved': 'A2A configuration saved; the tool list has been synced.',
+  'msg.a2aConfigCorrupted': 'A2A configuration data was corrupted; the raw value has been backed up to a2aConfig.corrupt and reset to empty. Please reconfigure.',
 
   // ---- Debug page ----
   'debug.parameters': 'Parameters',
@@ -171,11 +172,7 @@ export const enUS: Record<import('./zh-CN').MessageKey, string> = {
   'settings.form.keyLocalHint': 'The key is stored only in local chrome.storage.local and never enters the code repository.',
 
   // ---- A2A page ----
-  'a2a.hint': 'Enabled bindings are exposed to chat as a2a__<id>__send_task tools; bindings are persisted per agent.',
-  'a2a.editTarget': 'Edit Target',
-  'a2a.targetActive': '{name} (active)',
-  'a2a.targetShowing': 'Showing "{name}"',
-  'a2a.viewTargetNotActive': 'This is not the currently active agent: bindings of the active agent are what take effect in chat.',
+  'a2a.hint': 'Enabled bindings are exposed to chat as a2a__<id>__send_task tools; the configuration is global, shared by all agents, and takes effect after saving.',
   'a2a.editItemTitle': 'Edit Binding · {id}',
   'a2a.edit': 'Edit',
   'a2a.enabled': 'Enabled',
@@ -193,7 +190,8 @@ export const enUS: Record<import('./zh-CN').MessageKey, string> = {
   'a2a.tokenSet': 'Set',
   'a2a.tokenUnset': 'Not set',
   'a2a.noBindings': 'No remote agents bound yet.',
-  'a2a.noEditableAgent': 'No editable agent.',
+  'a2a.saving': 'Saving…',
+  'a2a.unsavedHint': 'You have unsaved changes: removals, enable/disable and form edits take effect and sync the tool list only after clicking "Save".',
   'a2a.enableTitle': 'When enabled, this remote agent is exposed to chat as the a2a__<id>__send_task tool',
   'a2a.remove': 'Remove',
   'a2a.tokenPlaceholder': 'bearer token for {id} (optional)',
@@ -208,7 +206,6 @@ export const enUS: Record<import('./zh-CN').MessageKey, string> = {
   'a2a.add.tokenPlaceholder': 'Bearer Token (optional)',
   'a2a.add.idInvalid': 'Invalid ID: only letters, digits, underscore and hyphen are allowed (immutable after creation).',
   'a2a.add.cardUrlInvalid': 'The card URL must be a valid HTTP(S) URL (usually /.well-known/agent-card.json).',
-  'a2a.add.noAgent': 'No active agent.',
   'a2a.add.idExists': 'ID "{id}" already exists (agentKey is immutable; to change the address, edit the card URL directly).',
   'a2a.add.submit': 'Add & Enable',
 };

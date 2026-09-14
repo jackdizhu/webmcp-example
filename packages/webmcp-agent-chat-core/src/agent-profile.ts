@@ -28,24 +28,9 @@ export interface AgentSkillRef {
 }
 
 /**
- * agent 绑定的远程智能体引用（A2A，设计 docs/webmcp-a2a-agent-protocol-design.md §5 D5）。
- *
- * 决策（2026-09-12）：id（agentKey）一经创建不可变、仅 cardUrl 可改 —— 工具名
- * `a2a__<id>__send_task` 随 id 稳定，不随 URL 漂移。id 语义约束见 a2a-tool-source
- * 的 validateA2aAgentId（仅 [a-zA-Z0-9_-]）。每 agent 的 bearer token 不入 profile
- * （对齐「apiKey 不允许覆写」的安全立场），由宿主 settings 持有。
+ * agent 绑定的远程智能体引用（A2A）已迁出（2026-09-14 解耦改造）：
+ * 原 AgentProfile.a2aAgents（per-agent 绑定）独立为全局单份配置，见 a2a-config.ts。
  */
-export interface AgentA2aRef {
-  id: string;
-  cardUrl: string;
-  enabled: boolean;
-  /**
-   * JSON-RPC 端点覆盖（可选）：message/send 与 tasks/get 的 POST 地址。
-   * 缺省用卡片 supportedInterfaces[0].url；Dify 等实现的卡片顶层 url 指向聊天页
-   * 而非 A2A 端点时，需显式覆盖（如 http://host/e/<app>/a2a）。
-   */
-  endpointOverride?: string;
-}
 
 /** per-agent LLM 配置覆写（缺省字段回落全局 settings；apiKey 不允许覆写）。 */
 export interface AgentLlmOverride {
@@ -56,7 +41,7 @@ export interface AgentLlmOverride {
   maxTokens?: number;
 }
 
-/** 智能体档案（数据模型见探索文档 §4；mcps 为预留占位，a2aAgents 为 A2A 远程智能体引用）。 */
+/** 智能体档案（数据模型见探索文档 §4；mcps 为预留占位；A2A 绑定已迁出为全局 a2aConfig）。 */
 export interface AgentProfile {
   id: string;
   name: string;
@@ -65,8 +50,6 @@ export interface AgentProfile {
   skills: AgentSkillRef[];
   /** mcps 预留占位（本期不实现，schema 先占位避免未来迁移）。 */
   mcps: unknown[];
-  /** A2A 远程智能体引用（enabled 者经 a2a-tool-source 暴露为 a2a__<id>__send_task 工具）。 */
-  a2aAgents: AgentA2aRef[];
   llmOverride?: AgentLlmOverride;
 }
 
@@ -122,7 +105,6 @@ export function createBuiltinAgentProfiles(): AgentProfile[] {
       },
       skills: [],
       mcps: [],
-      a2aAgents: [],
     },
     {
       id: 'multi-turn-loop',
@@ -144,7 +126,6 @@ export function createBuiltinAgentProfiles(): AgentProfile[] {
       // P2：绑定内置技能（L1 清单注入 + __agent_load_skill 取全文）；单个tools调试不绑定
       skills: [{ id: 'page-tools-guide', enabled: true }],
       mcps: [],
-      a2aAgents: [],
     },
     {
       id: 'a2a-analyst',
@@ -169,7 +150,6 @@ export function createBuiltinAgentProfiles(): AgentProfile[] {
       },
       skills: [],
       mcps: [],
-      a2aAgents: [],
     },
   ];
 }
@@ -192,8 +172,9 @@ function isPureLegacyDefault(state: AgentProfilesState): boolean {
 /**
  * 内置档案条目的原位刷新：existing 中与当前内置定义**同 id 但托管字段已过时**的条目
  * 刷新托管字段（name/description/rules/skills/mcps，内置档案由本模块托管，用户如需定制
- * 应通过新增自定义智能体）；**用户数据字段保留**（a2aAgents = A2A 页绑定、llmOverride =
- * per-agent 覆写 —— 整对象替换会每次启动清空用户配置，2026-09-12 修复）；自定义条目不动。
+ * 应通过新增自定义智能体）；**用户数据字段保留**（llmOverride = per-agent 覆写 ——
+ * 整对象替换会每次启动清空用户配置，2026-09-12 修复）；自定义条目不动。
+ * （A2A 绑定已迁出 profile 为全局 a2aConfig，2026-09-14 解耦改造。）
  *
  * 缺失内置条目追加（2026-09-13 决策）：新增内置智能体（如 a2a-analyst）需要下发给存量
  * 档案 —— existing 缺失的内置 id 按工厂顺序追加到末尾。当前无「删除智能体」UI，
@@ -218,7 +199,6 @@ function refreshBuiltinEntries(existing: AgentProfilesState): AgentProfilesState
     changed = true;
     return {
       ...builtin,
-      a2aAgents: agent.a2aAgents,
       ...(agent.llmOverride !== undefined ? { llmOverride: agent.llmOverride } : {}),
     };
   });
@@ -278,23 +258,8 @@ export function validateAgentProfilesState(value: unknown): AgentProfilesState {
       }
     }
     if (!Array.isArray(a['mcps'])) fail(`agent(${a['id']}).mcps is not an array`);
-    if (!Array.isArray(a['a2aAgents'])) fail(`agent(${a['id']}).a2aAgents is not an array`);
-    for (const ref of a['a2aAgents'] as unknown[]) {
-      const r = ref as Record<string, unknown>;
-      if (
-        typeof r !== 'object' ||
-        r === null ||
-        typeof r['id'] !== 'string' ||
-        r['id'].length === 0 ||
-        typeof r['cardUrl'] !== 'string' ||
-        r['cardUrl'].length === 0 ||
-        typeof r['enabled'] !== 'boolean' ||
-        (r['endpointOverride'] !== undefined &&
-          (typeof r['endpointOverride'] !== 'string' || (r['endpointOverride'] as string).length === 0))
-      ) {
-        fail(`agent(${a['id']}).a2aAgents has an invalid entry`);
-      }
-    }
+    // a2aAgents 校验已随解耦移除（2026-09-14）：存量数据中的 a2aAgents 字段作为
+    // 未知字段被宽容放行（迁移由宿主 a2a-config-store 在读取层完成），不再触发重建
     if (a['llmOverride'] !== undefined && (typeof a['llmOverride'] !== 'object' || a['llmOverride'] === null)) {
       fail(`agent(${a['id']}).llmOverride is not an object`);
     }

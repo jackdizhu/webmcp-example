@@ -22,6 +22,7 @@ import {
   type SkillSummary,
 } from 'webmcp-agent-chat-core';
 import { createA2aToolHost, loadA2aTokens, saveA2aTokens } from './a2a-host';
+import { loadA2aConfig, saveA2aConfig, toA2aConfigSnapshot } from './a2a-config-store';
 import { createAgentProfileStore } from './agent-profile-store';
 import { initLocale, joinList, t } from './i18n';
 import { createHostSkillSource, getBuiltinSkillSummary } from './skill-assets';
@@ -102,9 +103,13 @@ export const App = defineComponent({
     const skillResolver = createSkillResolver(createHostSkillSource());
     const skillToolDefinition = createSkillToolDefinition();
 
-    // ---- A2A 远程智能体（P0）：token 响应式快照 + 工具源托管（领域逻辑在 core）----
-    /** agentId → bearer token（onMounted 从 a2aTokens 存储加载；设置页编辑经 handleSaveA2aToken 落盘）。 */
+    // ---- A2A 远程智能体（2026-09-14 解耦：全局单份配置，独立于智能体档案）----
+    /** agentId → bearer token（onMounted 从 a2aTokens 存储加载；A2A 页保存时整批落盘）。 */
     const a2aTokens = reactive<Record<string, string>>({});
+    /** 全局 A2A 配置（a2aConfig 存储键的响应式视图；变化即重建 A2A 工具清单）。 */
+    const a2aConfig = ref<AgentA2aRef[]>([]);
+    /** 保存进行中标记（A2A 页保存按钮禁用，防重复提交）。 */
+    const a2aSaving = ref(false);
     const a2aHost = createA2aToolHost({
       onLog: (level, event, payload) => logEvent(level, 'chat', event, payload),
     });
@@ -119,52 +124,43 @@ export const App = defineComponent({
         a2aNoticeTimer = null;
       }, 6000);
     };
-    // 激活智能体变化（load 完成加载 / 切换智能体 / 设置页编辑 a2aAgents）即重建 A2A 工具清单；
+    // 全局 A2A 配置变化（启动加载 / A2A 页保存）即重建 A2A 工具清单；
     // 同步失败（卡片抓取/配置校验）此前完全静默 —— 对话侧「没有 a2a 工具」时无从排查，现提示到 A2A 页
-    watch(profileStore.activeAgent, (agent) => {
-      void a2aHost.sync(agent).then((failures) => {
+    watch(a2aConfig, (refs) => {
+      void a2aHost.sync(refs).then((failures) => {
         if (failures.length > 0) {
           notifyA2a('error', t('msg.a2aSyncFailed', { list: joinList(failures) }));
         }
       });
     });
     /**
-     * A2A 页编辑目标智能体（2026-09-13 修复「A2A 数据未持久化」体感问题）：
-     * 绑定关系 per-agent 分别持久化，但页面此前只读写「当前激活智能体」——
-     * 切换智能体后列表立即变空（数据其实在另一个 agent 的 profile 里），
-     * 且编辑期间激活变化会让操作漂移到错误目标。现改为显式选择编辑目标，
-     * 默认跟随激活智能体，可手动切换查看/编辑任意智能体的绑定。
+     * A2A 页保存（草稿 + 显式保存，与设置页同范式）：配置与 token 整批落盘，
+     * 成功后更新响应式基线（watch 驱动 sync 重建工具清单）并给出成功提示。
      */
-    const a2aTargetAgentId = ref('');
-    watch(
-      () => profileStore.activeAgentId.value,
-      (id) => {
-        a2aTargetAgentId.value = id;
-      },
-      { immediate: true }
-    );
-    /** A2A 页：整表替换目标智能体的 a2aAgents（profileStore 落盘，watch 驱动 sync）。 */
-    const handleUpdateA2aAgents = async (agentId: string, refs: AgentA2aRef[]): Promise<void> => {
+    const handleSaveA2aConfig = async (
+      draftRefs: AgentA2aRef[],
+      draftTokens: Record<string, string>
+    ): Promise<void> => {
+      if (a2aSaving.value) return;
+      a2aSaving.value = true;
       try {
-        await profileStore.updateAgentA2aAgents(agentId, refs);
-        logEvent('info', 'chat', 'a2a_agents_updated', { agentId, count: refs.length });
+        await saveA2aConfig(toA2aConfigSnapshot(draftRefs));
+        await saveA2aTokens({ ...draftTokens });
+        // token 响应式快照对齐草稿（含清除已移除条目的 token）
+        for (const key of Object.keys(a2aTokens)) {
+          if (!(key in draftTokens)) delete a2aTokens[key];
+        }
+        Object.assign(a2aTokens, draftTokens);
+        a2aConfig.value = draftRefs;
+        notifyA2a('ok', t('msg.a2aConfigSaved'));
+        logEvent('info', 'chat', 'a2a_config_saved', { count: draftRefs.length });
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
         notifyA2a('error', t('msg.a2aSaveFailed', { message }));
-        logEvent('error', 'chat', 'a2a_agents_update_failed', { message });
+        logEvent('error', 'chat', 'a2a_config_save_failed', { message });
+      } finally {
+        a2aSaving.value = false;
       }
-    };
-    /** 设置页 A2A 区块：保存单条 token 并即时重同步（token 影响卡片抓取鉴权）。 */
-    const handleSaveA2aToken = async (agentId: string, token: string): Promise<void> => {
-      a2aTokens[agentId] = token;
-      try {
-        await saveA2aTokens({ ...a2aTokens });
-      } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
-        notifyA2a('error', t('msg.a2aTokenSaveFailed', { id: agentId, message }));
-        logEvent('error', 'chat', 'a2a_token_save_failed', { message });
-      }
-      void a2aHost.sync(profileStore.activeAgent.value);
     };
     /** 设置页连通测试：委托 a2a-host 直连卡片（不进工具清单）。 */
     const handleTestA2aConnection = (cardUrl: string, token?: string): Promise<string> =>
@@ -459,10 +455,24 @@ export const App = defineComponent({
       // （D5/C8：迁移与校验逻辑在 core，这里只是调用 + 持久化适配）
       await profileStore.load(settings.systemPrompt);
 
-      // A2A token 快照加载（watch(profileStore.activeAgent) 会在 load 后自动首次 sync）
+      // A2A token 快照加载（a2aConfig 加载后由 watch 自动首次 sync）
       const tokens = await loadA2aTokens();
       for (const [key, token] of Object.entries(tokens)) {
         a2aTokens[key] = token;
+      }
+
+      // 全局 A2A 配置加载（2026-09-14 解耦）：首启缺键时从旧 agentProfiles 一次性迁移；
+      // 脏数据已备份 a2aConfig.corrupt 后重建，此处把异常结果反馈到 A2A 页
+      const a2aLoaded = await loadA2aConfig();
+      a2aConfig.value = a2aLoaded.refs;
+      if (a2aLoaded.corrupted) {
+        notifyA2a('error', t('msg.a2aConfigCorrupted'));
+        logEvent('error', 'chat', 'a2a_config_corrupted_rebuilt');
+      } else if (a2aLoaded.migrated) {
+        logEvent('info', 'chat', 'a2a_config_migrated', {
+          count: a2aLoaded.refs.length,
+          dropped: a2aLoaded.migratedDropped,
+        });
       }
 
       // 页面工具客户端 + 内置工具合成 + 注入工具层（a2a__* / __agent_load_skill）：
@@ -595,23 +605,14 @@ export const App = defineComponent({
         }),
         h(A2aPage, {
           active: activeTab.value === 'a2a',
-          agents: profileStore.agents.value.map((item) => ({
-            id: item.id,
-            name: item.name,
-            a2aAgents: item.a2aAgents,
-          })),
-          activeAgentId: profileStore.activeAgentId.value,
-          targetAgentId: a2aTargetAgentId.value,
-          a2aTokens: { ...a2aTokens },
+          refs: a2aConfig.value,
+          a2aTokens,
           busy: locked.value,
+          saving: a2aSaving.value,
           testConnection: handleTestA2aConnection,
           notice: a2aNotice.value,
-          'onUpdate:targetAgentId': (id: string) => {
-            a2aTargetAgentId.value = id;
-          },
-          'onUpdate:a2aAgents': (refs: AgentA2aRef[]) =>
-            void handleUpdateA2aAgents(a2aTargetAgentId.value, refs),
-          'onSave:token': (agentId: string, token: string) => void handleSaveA2aToken(agentId, token),
+          onSave: (refs: AgentA2aRef[], tokens: Record<string, string>) =>
+            void handleSaveA2aConfig(refs, tokens),
         }),
         h(SettingsPage, {
           active: activeTab.value === 'settings',

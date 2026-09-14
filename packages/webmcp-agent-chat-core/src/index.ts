@@ -30,6 +30,11 @@ export {
   type AgentCardSkill,
 } from './a2a-types';
 export {
+  sanitizeA2aRefs,
+  validateA2aConfigValue,
+  type AgentA2aRef,
+} from './a2a-config';
+export {
   A2A_POLL_INTERVAL_MS,
   A2A_POLL_MAX_ATTEMPTS,
   A2A_SEND_TASK_SUFFIX,
@@ -91,7 +96,6 @@ export {
   type AgentLlmOverride,
   type AgentProfile,
   type AgentProfilesState,
-  type AgentA2aRef,
   type AgentRuleItem,
   type AgentRules,
   type AgentSkillRef,

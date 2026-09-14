@@ -1,15 +1,19 @@
-// 智能体档案宿主存储（side-panel，P1 落地）。
+// 智能体档案宿主存储（side-panel，P1 落地；2026-09-14 解耦改造修订）。
 //
 // 职责：实现 core 的 ProfileStore 契约（chrome.storage.local 键 `agentProfiles`），
 // 并以 Vue 响应式状态暴露给 App 接线层。本模块是纯粹的「平台适配器」——
 // 领域逻辑（校验/迁移/组装）全部来自 webmcp-agent-chat-core（D5/C8 红线），
 // 这里只做：读存储 → 校验 →（缺失/损坏时）幂等迁移 → 落盘 → 响应式暴露。
+//
+// 2026-09-14 修订：
+// - 校验失败路径从「静默重建覆盖」改为「先备份 agentProfiles.corrupt 再重建」——
+//   原路径会把用户档案（含历史 a2aAgents）整库覆盖为出厂状态且无任何提示；
+// - 移除 updateAgentA2aAgents：A2A 绑定已迁出 profile 为全局 a2aConfig（a2a-config-store）。
 import { computed, ref, type ComputedRef, type Ref } from 'vue';
 import {
   getActiveAgent,
   migrateLegacySettings,
   validateAgentProfilesState,
-  type AgentA2aRef,
   type AgentProfile,
   type ProfileStore,
 } from 'webmcp-agent-chat-core';
@@ -22,6 +26,8 @@ export interface ProfileStorageLike {
 
 /** chrome.storage.local 中的持久化键。 */
 export const AGENT_PROFILES_STORAGE_KEY = 'agentProfiles';
+/** 脏数据备份键（保留最近一次校验失败的原始值，bounded，不无限累积）。 */
+export const AGENT_PROFILES_CORRUPT_KEY = 'agentProfiles.corrupt';
 
 /** 默认存储实现：chrome.storage.local。 */
 function defaultStorage(): ProfileStorageLike {
@@ -38,7 +44,10 @@ function createChromeProfileStore(storage: ProfileStorageLike): ProfileStore {
       try {
         return validateAgentProfilesState(value);
       } catch {
-        // 存储脏数据：返回 null 交由迁移路径重建（不静默覆盖，由 load 流程统一落盘）
+        // 存储脏数据：先备份原始值（保留现场供恢复/排查），再交由迁移路径重建
+        await storage.set({
+          [AGENT_PROFILES_CORRUPT_KEY]: { at: new Date().toISOString(), value },
+        });
         return null;
       }
     },
@@ -63,13 +72,6 @@ export interface AgentProfileStore {
   load(legacySystemPrompt: string): Promise<void>;
   /** 切换激活智能体（更新响应式状态并持久化）。 */
   setActive(id: string): Promise<void>;
-  /**
-   * 更新指定智能体的 A2A 远程智能体引用并持久化（A2A 页专用；id 不可变语义
-   * 由调用方保证 —— 本方法整表替换该智能体的 a2aAgents）。
-   * 目标智能体不存在时抛错（2026-09-13 修订：此前「只写激活智能体 + 静默忽略」
-   * 会造成编辑目标漂移时操作静默丢失，被误认为数据未持久化）。
-   */
-  updateAgentA2aAgents(agentId: string, refs: AgentA2aRef[]): Promise<void>;
 }
 
 export function createAgentProfileStore(
@@ -97,15 +99,6 @@ export function createAgentProfileStore(
     async setActive(id) {
       activeAgentId.value = id;
       await backend.save({ agents: agents.value, activeAgentId: id });
-    },
-    async updateAgentA2aAgents(agentId, refs) {
-      if (!agents.value.some((agent) => agent.id === agentId)) {
-        throw new Error(`目标智能体不存在：${agentId}`);
-      }
-      agents.value = agents.value.map((agent) =>
-        agent.id === agentId ? { ...agent, a2aAgents: refs } : agent
-      );
-      await backend.save({ agents: agents.value, activeAgentId: activeAgentId.value });
     },
   };
 }

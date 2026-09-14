@@ -4,6 +4,7 @@
   "description": "Install WebMCP on websites and consume their tools from an isolated content script.",
   "version": "1.1.2",
   "minimum_chrome_version": "116",
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA2b0hfRHeUf5QoqySoUkJAua//oo2TzE+Tf2iCpyh5r7UGt0L81yZ3z2tklxxT9KYLxl3vTNbHpj6xM1MyHdM/fQD9o82EONfsJ37WnGrjY7BKc2ioMZecmXZbswUur/VX92TaKMpJnVfrKKBOfZKYaOKrdlPPtwxojYo6XY9mjbYdfQKPO/bgdDc370sMLkRhuSI4KSYCVzu39ks2LYn70Z5EL8Ky/biZepzsygGXudDZbeb2Q14LY8KswNhjG//HlkadazLlgpf99CUcokH50LiqqOI/+CkAyvI6YNlMHFLOzkJvDqyrPUfp8beDkpneG4YFPyIyiEawX+agttA7wIDAQAB",
   "action": {},
   "side_panel": {
     "default_path": "side-panel.html"

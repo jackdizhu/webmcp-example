@@ -1,9 +1,9 @@
 // A2A 宿主托管模块（side-panel，P0）。
 //
 // 职责：把 core 的 a2a-tool-source 接到 chrome 平台上 ——
-// - 每远程 agent 的 bearer token 存 chrome.storage.local（键 a2aTokens，不入 profile，
+// - 每远程 agent 的 bearer token 存 chrome.storage.local（键 a2aTokens，不入配置，
 //   对齐「apiKey 不允许覆写」的安全立场，设计 §5 D5）；
-// - 随激活智能体的 a2aAgents 变化同步工具源（sync，App watch 驱动）；
+// - 随全局 A2A 配置（a2aConfig，2026-09-14 与智能体解耦）变化同步工具源（sync，App watch 驱动）；
 // - 设置页「测试连通」直连 client.fetchAgentCard（不落工具清单）。
 //
 // 边界：领域逻辑（卡片校验/任务编排/结果包装）全部在 webmcp-agent-chat-core，
@@ -66,11 +66,11 @@ export interface A2aToolHostDeps {
 
 export interface A2aToolHost {
   /**
-   * 按激活智能体同步工具源：enabled 的 a2aAgents + token 组装配置 → 预取卡片重建清单。
-   * activeAgent 为 null（无智能体）时清空清单。异步执行不抛错（失败经日志 + 失败列表记录）。
+   * 按全局 A2A 配置同步工具源：enabled 的 refs + token 组装配置 → 预取卡片重建清单。
+   * refs 为 null/空时清空清单。异步执行不抛错（失败经日志 + 失败列表记录）。
    * 返回卡片抓取/配置校验失败的 agentKey 列表（App 据此做 UI 提示）。
    */
-  sync(activeAgent: { a2aAgents: AgentA2aRef[] } | null): Promise<string[]>;
+  sync(refs: AgentA2aRef[] | null): Promise<string[]>;
   /** 当前可用工具清单（透传 core）。 */
   listTools(): ReturnType<A2aToolSource['listTools']>;
   /** 是否为 a2a__ 命名空间工具（App callTool 路由判定）。 */
@@ -92,12 +92,12 @@ export function createA2aToolHost(deps: A2aToolHostDeps = {}): A2aToolHost {
   });
 
   return {
-    async sync(activeAgent) {
-      const refs = activeAgent?.a2aAgents ?? [];
+    async sync(refs) {
+      const list = refs ?? [];
       const tokens = await loadA2aTokens(storage);
       const configs: A2aAgentConfig[] = [];
       const invalid: string[] = [];
-      for (const ref of refs) {
+      for (const ref of list) {
         if (!ref.enabled) continue;
         try {
           validateA2aAgentId(ref.id);

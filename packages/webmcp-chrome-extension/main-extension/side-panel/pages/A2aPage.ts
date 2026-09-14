@@ -1,10 +1,11 @@
-// 远程智能体（A2A）设置页（页面功能级，P0）：维护 a2a 配置与连接信息 ——
-// 激活智能体绑定的远程 A2A agent 列表（增删/启停/改卡片地址）、每条目的 bearer token
-// 编辑与连通测试。区块本体复用 components/A2aAgentsSection，数据/动作透传 App。
-// 独立成页（2026-09-12 页面结构调整）：与 LLM 连接配置（设置页）解耦，A2A 连接管理
-// 自成一类，页签与「数据源设置」同级。
+// 远程智能体（A2A）设置页（页面功能级，2026-09-14 解耦改造）：维护全局 A2A 配置与
+// 连接信息 —— 全局远程 A2A agent 列表（增删/启停/改卡片地址）、每条目的 bearer token
+// 编辑与连通测试。配置不再与智能体关联（全局单份，所有智能体共享工具清单）。
+// 保存范式与设置页一致：本页持**本地草稿**（refs + tokens），行级操作只改草稿，
+// 点「保存」才整批落盘（App handleSaveA2aConfig）并触发工具清单重建。
+// 区块本体复用 components/A2aAgentsSection。
 // 模板用 h() 渲染函数（MV3 扩展页 CSP 禁止运行时字符串编译，见 issues/001）。
-import { defineComponent, h, type PropType } from 'vue';
+import { computed, defineComponent, h, ref, watch, type PropType } from 'vue';
 import type { AgentA2aRef } from 'webmcp-agent-chat-core';
 import { A2aAgentsSection } from '../components/A2aAgentsSection';
 
@@ -13,17 +14,14 @@ export const A2aPage = defineComponent({
   props: {
     /** 本页是否激活（非激活时仅隐藏布局）。 */
     active: { type: Boolean, required: true },
-    /** 全部智能体档案（取激活项展示；绑定关系 per-agent 存 profile）。 */
-    agents: {
-      type: Array as PropType<Array<{ id: string; name: string; a2aAgents: AgentA2aRef[] }>>,
-      required: true,
-    },
-    activeAgentId: { type: String, required: true },
-    /** 当前编辑目标智能体 id（默认跟随激活，可手动切换；绑定按目标智能体分别持久化）。 */
-    targetAgentId: { type: String, required: true },
-    /** agentId → bearer token（App 从 a2aTokens 存储加载的快照）。 */
+    /** 全局 A2A 配置基线（App a2aConfig；保存成功后草稿按此重置）。 */
+    refs: { type: Array as PropType<AgentA2aRef[]>, required: true },
+    /** agentId → bearer token（App a2aTokens 响应式对象，基线读取用）。 */
     a2aTokens: { type: Object as PropType<Record<string, string>>, required: true },
+    /** 执行锁（对话/relay 进行中）：保存按钮禁用。 */
     busy: { type: Boolean, required: true },
+    /** App 侧保存进行中（防重复提交）。 */
+    saving: { type: Boolean, required: true },
     /** 连通测试（App 委托 a2a-host.testConnection），返回结果文案。 */
     testConnection: {
       type: Function as PropType<(cardUrl: string, token?: string) => Promise<string>>,
@@ -36,27 +34,70 @@ export const A2aPage = defineComponent({
     },
   },
   emits: {
-    /** 切换编辑目标智能体。 */
-    'update:targetAgentId': (id: string) => id.length > 0,
-    /** 整表替换目标智能体的 a2aAgents。 */
-    'update:a2aAgents': (refs: AgentA2aRef[]) => Array.isArray(refs),
-    /** 保存单条 token（agentId 可为尚未添加的待新增 id）。 */
-    'save:token': (agentId: string, _token: string) => agentId.length > 0,
+    /** 显式保存：整批提交草稿（App 落盘 a2aConfig + a2aTokens 后回写基线）。 */
+    save: (refs: AgentA2aRef[], _tokens: Record<string, string>) => Array.isArray(refs),
   },
   setup(props, { emit }) {
+    // ---- 本地草稿态（唯一可写副本；基线变化 = 保存成功/启动加载，草稿随之对齐）----
+    const draftRefs = ref<AgentA2aRef[]>([]);
+    const draftTokens = ref<Record<string, string>>({});
+
+    watch(
+      () => props.refs,
+      (refs) => {
+        draftRefs.value = refs.map((item) => ({ ...item }));
+      },
+      { immediate: true }
+    );
+    // 深度监听基线 token（App 仅在保存成功后原位变更该响应式对象；本页编辑只动草稿，
+    // 不会误触发）
+    watch(
+      () => props.a2aTokens,
+      (tokens) => {
+        draftTokens.value = { ...tokens };
+      },
+      { deep: true, immediate: true }
+    );
+
+    /** 草稿是否偏离基线（决定保存按钮可用态与未保存提示）。 */
+    const dirty = computed(
+      () =>
+        JSON.stringify(draftRefs.value) !== JSON.stringify(props.refs) ||
+        JSON.stringify(draftTokens.value) !== JSON.stringify(props.a2aTokens)
+    );
+
+    /** 区块提交（新增/编辑统一 upsert）：条目与 token 都只落草稿，待显式保存。 */
+    const handleCommitRef = (refItem: AgentA2aRef, token: string): void => {
+      const exists = draftRefs.value.some((item) => item.id === refItem.id);
+      draftRefs.value = exists
+        ? draftRefs.value.map((item) => (item.id === refItem.id ? refItem : item))
+        : [...draftRefs.value, refItem];
+      draftTokens.value = { ...draftTokens.value, [refItem.id]: token };
+    };
+
+    /** 区块删除（两步确认后）：仅落草稿。 */
+    const handleRemoveRef = (id: string): void => {
+      draftRefs.value = draftRefs.value.filter((item) => item.id !== id);
+    };
+
+    const handleSave = (): void => {
+      if (props.busy || props.saving || !dirty.value) return;
+      emit('save', draftRefs.value.map((item) => ({ ...item })), { ...draftTokens.value });
+    };
+
     return () =>
       h('div', { class: 'a2a-page', style: { display: props.active ? '' : 'none' } }, [
         h(A2aAgentsSection, {
-          agents: props.agents,
-          activeAgentId: props.activeAgentId,
-          targetAgentId: props.targetAgentId,
-          a2aTokens: props.a2aTokens,
+          refs: draftRefs.value,
+          a2aTokens: draftTokens.value,
           busy: props.busy,
+          saving: props.saving,
+          dirty: dirty.value,
           testConnection: props.testConnection,
           notice: props.notice,
-          'onUpdate:targetAgentId': (id: string) => emit('update:targetAgentId', id),
-          'onUpdate:a2aAgents': (refs: AgentA2aRef[]) => emit('update:a2aAgents', refs),
-          'onSave:token': (agentId: string, token: string) => emit('save:token', agentId, token),
+          onCommitRef: (refItem: AgentA2aRef, token: string) => handleCommitRef(refItem, token),
+          onRemoveRef: (id: string) => handleRemoveRef(id),
+          onSave: () => handleSave(),
         }),
       ]);
   },

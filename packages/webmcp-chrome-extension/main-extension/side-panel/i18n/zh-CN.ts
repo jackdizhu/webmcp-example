@@ -68,7 +68,8 @@ export const zhCN = {
     '设置已保存。控制台输出已开启：在侧边栏上右键 →「检查」打开控制台，用过滤框输入 traceId 可筛出该轮完整链路。',
   'msg.a2aSyncFailed': '以下远程智能体的卡片抓取失败，对话中将不可用：{list}',
   'msg.a2aSaveFailed': 'A2A 配置保存失败：{message}',
-  'msg.a2aTokenSaveFailed': '「{id}」的 Bearer Token 保存失败：{message}',
+  'msg.a2aConfigSaved': 'A2A 配置已保存，工具清单已同步。',
+  'msg.a2aConfigCorrupted': 'A2A 配置数据损坏，已备份到 a2aConfig.corrupt 并重置为空，请重新配置。',
 
   // ---- 调试页 ----
   'debug.parameters': '参数说明',
@@ -169,11 +170,7 @@ export const zhCN = {
   'settings.form.keyLocalHint': 'Key 仅保存在本机 chrome.storage.local，不会进入代码仓库。',
 
   // ---- A2A 页 ----
-  'a2a.hint': '启用者以 a2a__<id>__send_task 工具暴露给对话；绑定按智能体分别持久化。',
-  'a2a.editTarget': '编辑目标',
-  'a2a.targetActive': '{name}（当前激活）',
-  'a2a.targetShowing': '展示「{name}」',
-  'a2a.viewTargetNotActive': '该智能体不是当前激活智能体：对话中生效的是激活智能体的绑定。',
+  'a2a.hint': '启用者以 a2a__<id>__send_task 工具暴露给对话；配置全局生效，所有智能体共享（保存后生效）。',
   'a2a.editItemTitle': '编辑绑定 · {id}',
   'a2a.edit': '编辑',
   'a2a.enabled': '已启用',
@@ -191,7 +188,8 @@ export const zhCN = {
   'a2a.tokenSet': '已配置',
   'a2a.tokenUnset': '未配置',
   'a2a.noBindings': '暂未绑定远程智能体。',
-  'a2a.noEditableAgent': '当前没有可编辑的智能体。',
+  'a2a.saving': '保存中…',
+  'a2a.unsavedHint': '有未保存的修改：删除/启停/表单编辑需点击「保存」后才会生效并同步工具清单。',
   'a2a.enableTitle': '启用后该远程智能体以 a2a__<id>__send_task 工具暴露给对话',
   'a2a.remove': '删除',
   'a2a.tokenPlaceholder': '{id} 的 bearer token（可留空）',
@@ -204,7 +202,6 @@ export const zhCN = {
   'a2a.add.tokenPlaceholder': 'Bearer Token（可留空）',
   'a2a.add.idInvalid': 'ID 非法：仅允许字母、数字、下划线、连字符（创建后不可修改）。',
   'a2a.add.cardUrlInvalid': '卡片地址必须是合法的 HTTP(S) URL（通常为 /.well-known/agent-card.json）。',
-  'a2a.add.noAgent': '当前没有激活的智能体。',
   'a2a.add.idExists': 'ID「{id}」已存在（agentKey 创建后不可变，如需更换地址请直接编辑卡片地址）。',
   'a2a.add.submit': '添加并启用',
 } as const;
