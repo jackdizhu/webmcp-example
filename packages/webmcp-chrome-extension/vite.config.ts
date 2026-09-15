@@ -1,4 +1,5 @@
 import { cpSync } from 'node:fs';
+import vue from '@vitejs/plugin-vue';
 import { defineConfig } from 'vite-plus';
 import type { PackUserConfig } from 'vite-plus/pack';
 
@@ -32,8 +33,12 @@ const extensionBase: PackUserConfig = {
 // 禁止改回运行时字符串编译（vue.esm-bundler 的 new Function）——MV3 扩展页 CSP
 // 为 script-src 'self'，eval 类调用会直接 EvalError 导致侧栏白屏。
 // 旗标保留：缺失会在产物里残留未定义的全局标识符，IIFE 下直接 ReferenceError。
+//
+// SFC 试点（实验 docs/sfc-plugin-experiment-plan.md）：plugin-vue 在构建期把 .vue
+// 编译为渲染函数，运行时零 eval，与 CSP 兼容；试点组件禁止携带 <style> 块。
 const sidePanelBase: PackUserConfig = {
   ...extensionBase,
+  plugins: [vue()],
   define: {
     __VUE_OPTIONS_API__: 'true',
     __VUE_PROD_DEVTOOLS__: 'false',
@@ -45,9 +50,11 @@ function copyManifest(outDir: string): void {
   cpSync(manifestFile, `${outDir}/manifest.json`);
 }
 
-// 侧边栏页面是静态 HTML（样式内联其中），构建时随 manifest 一起拷入输出目录。
+// 侧边栏页面是静态 HTML（视觉样式在独立 side-panel.css，经 link 引入），
+// 构建时随 manifest 一起拷入输出目录。
 function copySidePanelHtml(outDir: string): void {
   cpSync('main-extension/side-panel/side-panel.html', `${outDir}/side-panel.html`);
+  cpSync('main-extension/side-panel/side-panel.css', `${outDir}/side-panel.css`);
 }
 
 export default defineConfig({

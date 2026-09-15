@@ -42,3 +42,10 @@ at new Function (<anonymous>)
 
 - `pnpm typecheck` / `pnpm lint` / `pnpm test`（49 passed）全绿。
 - 产物级验证：重新 `build` 并加载 `dist/` 后侧栏正常渲染。
+
+## 后记（2026-09-16）：SFC 解锁，约束边界收窄
+
+- 本 issue 禁令的准确边界是「运行时求值」，而非「SFC」。SFC 经构建期编译即渲染函数，运行时零 eval。
+- 实验（`docs/sfc-plugin-experiment-plan.md` 路径 1）已通过：`vite.config.ts` sidePanelBase 挂 `plugins: [vue()]`（`@vitejs/plugin-vue@^6.0.9`）后 `vp pack` 构建成功，`dist/side-panel.iife.js` 产物级检查**无 `new Function` / `eval`**，试点组件 `PilotHello.vue` 编译痕迹在。
+- 本文原表述「本工程 vite-plus 不支持插件」**已证伪**：`PackUserConfig` 类型实际含 `plugins?: TsdownPluginOption`（vite-plus-core `dist/tsdown/index-types.d.ts:2147`）。
+- 现行规范见 `rules/coding-style.md` §3（v1.5.0）：SFC 块顺序固定 `template` → `script`、禁 `<style>` 块、放 `components/sfc/`；运行时字符串模板禁令不变。
