@@ -6,7 +6,7 @@
 import { defineComponent, computed, h, ref, watch, type PropType, type VNode } from 'vue';
 import { t } from '../../i18n';
 import type { MessageKey } from '../../i18n/zh-CN';
-import type { PanelSettings } from '../../panel-client';
+import type { PanelSettings } from '../../runtime/panel-client';
 
 /** 参与编辑与 dirty 比较的字段（debugMode 不在本页 UI 编辑，维持存储兼容原样透传）。 */
 const EDITABLE_FIELDS = [

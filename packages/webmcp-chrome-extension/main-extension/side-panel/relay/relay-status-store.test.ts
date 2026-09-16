@@ -5,7 +5,7 @@ import type {
   RelayInvokeLogEntry,
   RelayTabSelection,
   RelayTabStatus,
-} from '../../core/relay-status-protocol';
+} from '../../../core/relay-status-protocol';
 import type { RelayStatusClient } from './relay-status-client';
 import { createRelayStatusStore } from './relay-status-store';
 

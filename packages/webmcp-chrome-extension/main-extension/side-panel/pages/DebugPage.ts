@@ -5,8 +5,8 @@ import { computed, defineComponent, h, ref, watch, type VNode } from 'vue';
 import { serializeToolResult, type PageToolMeta } from '../../../core/page-tools-bridge';
 // import PilotHello from '../components/sfc/PilotHello.vue';
 import { t } from '../i18n';
-import { logEvent } from '../logger';
-import type { PageToolsClient } from '../panel-client';
+import { logEvent } from '../logger/logger';
+import type { PageToolsClient } from '../runtime/panel-client';
 import {
   appendRun,
   buildArgsTemplate,
@@ -15,7 +15,7 @@ import {
   validateArgsText,
   type ArgsValidation,
   type DebugRun,
-} from '../debugger-core';
+} from '../runtime/debugger-core';
 
 export const DebugPage = defineComponent({
   name: 'DebugPage',

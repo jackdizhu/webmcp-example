@@ -1,0 +1,43 @@
+/* 数据源设置页：数据源选择 + 连接刷新 + 只读状态摘要（D 系列优化含在内）。 */
+
+/* 数据源设置页：数据源选择（复用 .relay-source-* 样式）+ 连接刷新 */
+.datasource-page { flex: 1; min-height: 0; overflow-y: auto; padding: 12px; display: flex; flex-direction: column; gap: 12px; }
+.datasource-connections { display: flex; flex-direction: column; gap: 6px; }
+.datasource-connections h4 { font-size: 13px; color: var(--text); font-weight: 600; }
+
+/* 数据源页只读状态摘要（编辑态/只读态拆分，2026-09-13）：统计 + 各页签状态徽章表 */
+.datasource-summary { display: flex; flex-direction: column; gap: 6px; }
+.datasource-summary h4 { font-size: 13px; color: var(--text); font-weight: 600; }
+.datasource-summary-list {
+  list-style: none; display: flex; flex-direction: column; gap: 4px;
+}
+
+/* relay 数据源选择：checkbox 多选；未选中的页签不连 relay（数据过滤不传递） */
+.relay-source-picker { display: flex; flex-direction: column; gap: 6px; }
+.relay-source-picker h4 { font-size: 13px; color: var(--text); font-weight: 600; }
+.relay-source-mode { font-size: 11px; color: var(--muted); }
+.relay-source-list { list-style: none; display: flex; flex-direction: column; gap: 4px; }
+.relay-source-item {
+  display: flex; align-items: center; gap: 8px; padding: 4px 8px;
+  border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--bg);
+  transition: border-color var(--dur-fast) var(--ease-out), background var(--dur-fast) var(--ease-out);
+}
+.relay-source-item:hover { border-color: var(--border-strong); background: var(--surface); }
+.relay-source-label { display: flex; align-items: center; gap: 6px; flex: 1; min-width: 0; cursor: pointer; }
+.relay-source-label input[type='checkbox'] { width: 14px; height: 14px; flex: none; }
+.relay-source-title {
+  font-size: 12px; color: var(--text);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.relay-source-reset { align-self: flex-start; }
+
+/* ---- D 系列优化（D1 选中标识 / D7 URL 次行 / 统计并入标题行）---- */
+.section-head { display: flex; align-items: baseline; gap: var(--sp-4); flex-wrap: wrap; }
+.relay-source-item { flex-wrap: wrap; }
+.relay-source-item-selected { border-left: 2px solid var(--accent); background: var(--accent-soft); }
+.relay-badge-selected { color: var(--accent); background: var(--accent-soft); border: 1px solid var(--accent); }
+.relay-source-info { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
+.relay-source-url {
+  font: var(--fs-1)/1.4 var(--mono); color: var(--faint);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}

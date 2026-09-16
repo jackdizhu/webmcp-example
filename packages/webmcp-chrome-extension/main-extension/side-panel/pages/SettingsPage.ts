@@ -9,10 +9,10 @@
 import { defineComponent, h, ref, watch, type PropType, type VNode } from 'vue';
 import { t } from '../i18n';
 import { SubPageFrame } from '../components/SubPageFrame';
-import type { PanelSettings } from '../panel-client';
+import type { PanelSettings } from '../runtime/panel-client';
 import { SettingsForm } from '../components/settings/SettingsForm';
 import { SettingsSummary } from '../components/settings/SettingsSummary';
-import { clearLogs, exportLogs, logCount, logEvent } from '../logger';
+import { clearLogs, exportLogs, logCount, logEvent } from '../logger/logger';
 
 export const SettingsPage = defineComponent({
   name: 'SettingsPage',

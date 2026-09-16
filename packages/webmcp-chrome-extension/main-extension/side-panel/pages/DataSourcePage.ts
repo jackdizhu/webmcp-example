@@ -9,7 +9,7 @@ import { defineComponent, h, ref, type PropType, type VNode } from 'vue';
 import type { RelayTabSelection, RelayTabStatus } from '../../../core/relay-status-protocol';
 import { t } from '../i18n';
 import { SubPageFrame } from '../components/SubPageFrame';
-import type { RelayStatusClient } from '../relay-status-client';
+import type { RelayStatusClient } from '../relay/relay-status-client';
 import { ConnectionActions } from '../components/datasource/ConnectionActions';
 import { DataSourcePicker } from '../components/datasource/DataSourcePicker';
 import { DataSourceSummary } from '../components/datasource/DataSourceSummary';

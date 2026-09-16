@@ -50,11 +50,11 @@ function copyManifest(outDir: string): void {
   cpSync(manifestFile, `${outDir}/manifest.json`);
 }
 
-// 侧边栏页面是静态 HTML（视觉样式在独立 side-panel.css，经 link 引入），
-// 构建时随 manifest 一起拷入输出目录。
+// 侧边栏页面是静态 HTML（视觉样式按页面/组件拆分在 style/ 目录，经 index.css
+// 聚合引入，@import 顺序即级联顺序），构建时随 manifest 一起拷入输出目录。
 function copySidePanelHtml(outDir: string): void {
   cpSync('main-extension/side-panel/side-panel.html', `${outDir}/side-panel.html`);
-  cpSync('main-extension/side-panel/side-panel.css', `${outDir}/side-panel.css`);
+  cpSync('main-extension/side-panel/style', `${outDir}/style`, { recursive: true });
 }
 
 export default defineConfig({

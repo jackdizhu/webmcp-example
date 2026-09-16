@@ -2,7 +2,7 @@
 // + 标签页数据源选择（selection 推送）。
 import { describe, expect, it, vi } from 'vitest';
 
-import type { RelayInvokeLogEntry, RelayStatusMessage } from '../../core/relay-status-protocol';
+import type { RelayInvokeLogEntry, RelayStatusMessage } from '../../../core/relay-status-protocol';
 import { connectRelayStatus } from './relay-status-client';
 
 /** 状态端口桩：服务端（SW）视角可 postMessage / emit。 */
