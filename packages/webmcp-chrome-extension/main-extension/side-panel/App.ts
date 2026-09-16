@@ -162,21 +162,27 @@ export const App = defineComponent({
         a2aSaving.value = false;
       }
     };
-    /** 设置页连通测试：委托 a2a-host 直连卡片（不进工具清单）。 */
-    const handleTestA2aConnection = (cardUrl: string, token?: string): Promise<string> =>
-      a2aHost.testConnection(cardUrl, token);
+    /** 设置页连通测试：委托 a2a-host 按协议分派（jsonrpc 抓卡片 / dify 真实探测，不进工具清单）。 */
+    const handleTestA2aConnection = (refItem: AgentA2aRef, token?: string): Promise<string> =>
+      a2aHost.testConnection(refItem, token);
     /**
      * 最近一次 SKILL 调用的技能 id（SKILL 行展示用：技能 id 才是 SKILL 唯一标识，工具名只是加载器）。
      * 循环内工具串行执行，callTool 捕获 → applyEvent(result/error) 回填，时序安全。
      */
     let lastSkillLabel: string | null = null;
     /**
-     * a2a__<id>__send_task → 远端智能体 id（A2A 行展示用）。
-     * 工具名本身携带 id，无需经 callTool 缝捕获，可同步提取。
+     * a2a__<id>__send_task / a2a_dify__<id>__send_task → 远端智能体 id（A2A 行展示用）。
+     * 工具名本身携带 id，无需经 callTool 缝捕获，可同步提取（前缀随协议：jsonrpc / dify）。
      */
     const a2aAgentIdFromToolName = (name: string): string | null => {
       if (!a2aHost.handles(name)) return null;
-      return name.slice('a2a__'.length, name.length - '__send_task'.length);
+      const prefixes = ['a2a_dify__', 'a2a__'] as const;
+      for (const prefix of prefixes) {
+        if (name.startsWith(prefix)) {
+          return name.slice(prefix.length, name.length - '__send_task'.length);
+        }
+      }
+      return null;
     };
     /** 激活智能体已启用技能的摘要（L1 清单数据源 = 内置 assets；storage 覆写只影响 L2 全文内容）。 */
     const enabledSkillSummaries = (): SkillSummary[] =>

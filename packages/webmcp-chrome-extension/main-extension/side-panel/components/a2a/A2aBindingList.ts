@@ -29,9 +29,9 @@ export const A2aBindingList = defineComponent({
     refs: { type: Array as PropType<AgentA2aRef[]>, required: true },
     /** agentId → bearer token（App a2aTokens 响应式快照；只读展示徽章）。 */
     a2aTokens: { type: Object as PropType<Record<string, string>>, required: true },
-    /** 连通测试（App 委托 a2a-host.testConnection），resolve = 成功文案 / reject = 失败文案。 */
+    /** 连通测试（App 委托 a2a-host.testConnection，按协议分派；resolve = 成功文案 / reject = 失败文案）。 */
     testConnection: {
-      type: Function as PropType<(cardUrl: string, token?: string) => Promise<string>>,
+      type: Function as PropType<(refItem: AgentA2aRef, token?: string) => Promise<string>>,
       required: true,
     },
   },
@@ -79,11 +79,12 @@ export const A2aBindingList = defineComponent({
       }, CONFIRM_TIMEOUT_MS);
     };
 
-    const handleTest = async (agentId: string, cardUrl: string): Promise<void> => {
+    const handleTest = async (refItem: AgentA2aRef): Promise<void> => {
+      const agentId = refItem.id;
       if (testing.value.has(agentId)) return;
       testing.value = new Set([...testing.value, agentId]);
       try {
-        const message = await props.testConnection(cardUrl, props.a2aTokens[agentId]);
+        const message = await props.testConnection(refItem, props.a2aTokens[agentId]);
         testResults.value = { ...testResults.value, [agentId]: { kind: 'ok', text: message } };
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
@@ -114,16 +115,27 @@ export const A2aBindingList = defineComponent({
         const tokenSet = (props.a2aTokens[refItem.id] ?? '').length > 0;
         const armed = confirmRemoveId.value === refItem.id;
         const result = testResults.value[refItem.id];
+        const isDify = refItem.protocol === 'dify';
         return h('div', { class: ['a2a-item', refItem.enabled ? '' : 'a2a-item-off'], key: refItem.id }, [
           // A2 卡片头只留 id + 状态徽章（操作独立成行）
           h('div', { class: 'a2a-item-head' }, [
             h('span', { class: 'a2a-item-id', title: refItem.id }, refItem.id),
             h('span', { class: 'a2a-item-state' }, refItem.enabled ? t('a2a.enabled') : t('a2a.disabled')),
           ]),
-          metaRow(t('a2a.cardUrl'), refItem.cardUrl, refItem.cardUrl),
-          refItem.endpointOverride !== undefined
-            ? metaRow(t('a2a.endpointOverride'), refItem.endpointOverride, refItem.endpointOverride)
-            : metaRow(t('a2a.endpointOverride'), metaBadge(t('a2a.noOverride'), 'muted')),
+          // 协议徽标（2026-09-16 协议配置扩展）
+          metaRow(t('a2a.protocol.label'), metaBadge(isDify ? t('a2a.protocol.dify') : t('a2a.protocol.jsonrpc'), 'muted')),
+          isDify
+            ? metaRow(t('a2a.form.endpoint'), refItem.endpoint ?? '', refItem.endpoint)
+            : metaRow(t('a2a.cardUrl'), refItem.cardUrl ?? '', refItem.cardUrl),
+          !isDify
+            ? metaRow(
+                t('a2a.endpointOverride'),
+                refItem.endpointOverride !== undefined
+                  ? refItem.endpointOverride
+                  : metaBadge(t('a2a.noOverride'), 'muted'),
+                refItem.endpointOverride
+              )
+            : null,
           metaRow(
             'Token',
             metaBadge(tokenSet ? t('a2a.tokenSet') : t('a2a.tokenUnset'), tokenSet ? 'ok' : 'muted')
@@ -134,7 +146,7 @@ export const A2aBindingList = defineComponent({
               class: 'ghost',
               type: 'button',
               disabled: testing.value.has(refItem.id),
-              onClick: () => void handleTest(refItem.id, refItem.cardUrl),
+              onClick: () => void handleTest(refItem),
             }, testing.value.has(refItem.id) ? t('a2a.testing') : t('a2a.testConnection')),
             h('button', {
               class: 'ghost',

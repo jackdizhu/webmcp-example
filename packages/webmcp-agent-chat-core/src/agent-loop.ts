@@ -127,19 +127,52 @@ function parseToolArgs(raw: string): Record<string, unknown> | null {
   }
 }
 
+/** runAgentLoop 的入参聚合（原 4 个位置参数收敛为对象，满足参数 ≤ 3 约束）。 */
+export interface AgentLoopParams {
+  /** 对话历史，必须以最新的用户消息结尾（不含 system 消息）。 */
+  history: readonly ChatMessage[];
+  /** 当前页面可用工具（可为空：此时模型只能纯文本回答）。 */
+  tools: readonly AgentTool[];
+  /** 循环依赖（LLM 客户端与工具执行器）。 */
+  deps: AgentLoopDeps;
+  /** 循环选项（缺省全部回退内置默认值）。 */
+  options?: AgentLoopOptions;
+}
+
+/** 执行单个工具调用并生成回填消息内容（错误也文本化回填，让模型自我纠正）。 */
+async function executeSingleTool(
+  call: ToolCallRequest,
+  deps: AgentLoopDeps,
+  onEvent: (event: AgentLoopEvent) => void
+): Promise<string> {
+  onEvent({ type: 'tool_start', name: call.function.name });
+  const args = parseToolArgs(call.function.arguments);
+  if (args === null) {
+    onEvent({ type: 'tool_error', name: call.function.name, error: '工具入参不是合法的 JSON 对象' });
+    return '错误：工具入参不是合法的 JSON 对象，请修正后重试。';
+  }
+  try {
+    const result = await deps.executeTool(call.function.name, args);
+    const serialized = JSON.stringify(result) ?? 'null';
+    onEvent({ type: 'tool_result', name: call.function.name, result: serialized });
+    return serialized;
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    onEvent({ type: 'tool_error', name: call.function.name, error: message });
+    return `错误：${message}`;
+  }
+}
+
 /**
  * 运行一轮 agent 对话循环。
  *
- * @param history 对话历史，必须以最新的用户消息结尾（不含 system 消息）
- * @param tools 当前页面可用工具（可为空：此时模型只能纯文本回答）
+ * @param params.history 对话历史，必须以最新的用户消息结尾（不含 system 消息）
+ * @param params.tools 当前页面可用工具（可为空：此时模型只能纯文本回答）
  * @returns 最终文本与完整对话记录
  */
-export async function runAgentLoop(
-  history: readonly ChatMessage[],
-  tools: readonly AgentTool[],
-  deps: AgentLoopDeps,
-  options: AgentLoopOptions = {}
-): Promise<AgentLoopResult> {
+export async function runAgentLoop(params: AgentLoopParams): Promise<AgentLoopResult> {
+  const { history, tools, deps } = params;
+  const options = params.options ?? {};
   const systemPrompt = options.systemPrompt ?? DEFAULT_SYSTEM_PROMPT;
   const maxIterations = options.maxIterations ?? 8;
   const onEvent = options.onEvent ?? (() => {});
@@ -172,24 +205,7 @@ export async function runAgentLoop(
     // assistant 消息无文本时协议要求 content 允许为空串，保持显式空串即可。
     for (const call of toolCalls) {
       throwIfAborted();
-      onEvent({ type: 'tool_start', name: call.function.name });
-      const args = parseToolArgs(call.function.arguments);
-      let toolContent: string;
-      if (args === null) {
-        onEvent({ type: 'tool_error', name: call.function.name, error: '工具入参不是合法的 JSON 对象' });
-        toolContent = '错误：工具入参不是合法的 JSON 对象，请修正后重试。';
-      } else {
-        try {
-          const result = await deps.executeTool(call.function.name, args);
-          const serialized = JSON.stringify(result) ?? 'null';
-          toolContent = serialized;
-          onEvent({ type: 'tool_result', name: call.function.name, result: serialized });
-        } catch (error) {
-          const message = error instanceof Error ? error.message : String(error);
-          toolContent = `错误：${message}`;
-          onEvent({ type: 'tool_error', name: call.function.name, error: message });
-        }
-      }
+      const toolContent = await executeSingleTool(call, deps, onEvent);
       const toolMessage: ChatMessage = { role: 'tool', content: toolContent, toolCallId: call.id };
       internal.push(toolMessage);
       transcript.push(toolMessage);

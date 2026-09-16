@@ -22,9 +22,9 @@ export const A2aPage = defineComponent({
     busy: { type: Boolean, required: true },
     /** App 侧保存进行中（防重复提交）。 */
     saving: { type: Boolean, required: true },
-    /** 连通测试（App 委托 a2a-host.testConnection），返回结果文案。 */
+    /** 连通测试（App 委托 a2a-host.testConnection，按协议分派，返回结果文案）。 */
     testConnection: {
-      type: Function as PropType<(cardUrl: string, token?: string) => Promise<string>>,
+      type: Function as PropType<(refItem: AgentA2aRef, token?: string) => Promise<string>>,
       required: true,
     },
     /** App 层全局提示（持久化失败等；null = 无提示）。 */

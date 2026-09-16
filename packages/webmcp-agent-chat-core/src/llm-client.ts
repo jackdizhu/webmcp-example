@@ -15,6 +15,11 @@ const noopLog: LlmLogFn = () => {};
 /** apiPath 显式配置为空串时的提示文案（不回退默认路径，阻断请求）。 */
 export const API_PATH_EMPTY_HINT = '请配置apiPath，如：/chat/completions';
 
+/** openai-compat 协议默认请求路径（原字面量提取为常量，行为不变）。 */
+const DEFAULT_OPENAI_API_PATH = '/chat/completions';
+/** anthropic 协议默认 apiPath 空串提示（原硬编码文案提取为常量，与 API_PATH_EMPTY_HINT 对称，行为不变）。 */
+const ANTHROPIC_API_PATH_EMPTY_HINT = '请配置apiPath，如：/v1/messages';
+
 /** LLM 服务配置（API Key 由宿主持有与持久化，禁止硬编码）。 */
 export interface LlmConfig {
   apiKey: string;
@@ -103,7 +108,7 @@ export function createOpenAiCompatClient(
   return {
     async complete(messages, tools, signal) {
       // apiPath 语义：undefined 回退默认路径；显式空串不回退，阻断请求并提示配置
-      const apiPath = config.apiPath ?? '/chat/completions';
+      const apiPath = config.apiPath ?? DEFAULT_OPENAI_API_PATH;
       if (apiPath.trim().length === 0) throw new Error(API_PATH_EMPTY_HINT);
       const path = apiPath.startsWith('/') ? apiPath : `/${apiPath}`;
       const url = `${config.baseUrl.replace(/\/+$/, '')}${path}`;
@@ -269,7 +274,7 @@ export function createAnthropicClient(
   return {
     async complete(messages, tools, signal) {
       const apiPath = config.apiPath ?? '/v1/messages';
-      if (apiPath.trim().length === 0) throw new Error('请配置apiPath，如：/v1/messages');
+      if (apiPath.trim().length === 0) throw new Error(ANTHROPIC_API_PATH_EMPTY_HINT);
       const path = apiPath.startsWith('/') ? apiPath : `/${apiPath}`;
       const url = `${config.baseUrl.replace(/\/+$/, '')}${path}`;
       const { system, messages: wireMessages } = toAnthropicMessages(messages);

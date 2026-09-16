@@ -88,6 +88,37 @@ function takeRequestId(): number {
   return id;
 }
 
+// ---- 公共 HTTP 执行段（卡片抓取与 JSON-RPC 同构：超时 / 错误分型 / 日志 / JSON 解析）----
+
+/** 单次 HTTP 请求计划（公共执行段的输入；文案差异由调用方注入）。 */
+interface HttpRequestPlan {
+  url: string;
+  method: 'GET' | 'POST';
+  headers: Record<string, string>;
+  /** POST 请求体（JSON 字符串）；GET 省略。 */
+  body?: string;
+  /** debug 日志事件名。 */
+  logEvent: string;
+  /** 非 2xx 状态码的错误文案。 */
+  httpErrorMessage: (status: number) => string;
+  /** 响应非合法 JSON 时的错误文案前缀。 */
+  jsonErrorLabel: string;
+  /** 附加日志字段（调用方按原埋点形态注入，如 JSON-RPC 方法名；不注入则无附加键）。 */
+  logContext?: Record<string, unknown>;
+}
+
+/** 组装鉴权头（token 只进 Authorization 头，不落日志与请求体）。 */
+function buildAuthHeaders(options: A2aRequestOptions | undefined, base: Record<string, string>): Record<string, string> {
+  if (options?.token) return { ...base, Authorization: `Bearer ${options.token}` };
+  return base;
+}
+
+/** 把 AbortError 归一为确定性超时/终止文案。 */
+function abortErrorMessage(error: unknown): string {
+  const reason = error instanceof Error ? error.message : String(error);
+  return reason.includes('超时') ? reason : '请求已被终止';
+}
+
 /** 组装超时 + 外部 signal 的联合 AbortController；返回清理函数与内部 signal。 */
 function createTimeoutController(
   timeoutMs: number,
@@ -109,10 +140,87 @@ function createTimeoutController(
   };
 }
 
-/** 把 AbortError 归一为确定性超时/终止文案。 */
-function abortErrorMessage(error: unknown): string {
-  const reason = error instanceof Error ? error.message : String(error);
-  return reason.includes('超时') ? reason : '请求已被终止';
+/** 校验 URL 是 HTTP(S)；统一 invalid-url 错误（设计 §5 D8 安全底线）。 */
+function requireHttpUrl(url: string, what: string): string {
+  if (!isHttpUrl(url)) {
+    throw new A2aClientError('invalid-url', `${what} 不是合法的 HTTP(S) 地址：${url}`);
+  }
+  return url;
+}
+
+/**
+ * 公共 HTTP 执行段：超时控制 → fetch（网络错误分型）→ debug 日志 → 状态校验 → JSON 解析。
+ * 卡片抓取（GET）与 JSON-RPC（POST）共用；调用方只注入差异文案。
+ */
+async function executeJsonRequest(
+  fetchImpl: typeof fetch,
+  onLog: LlmLogFn,
+  plan: HttpRequestPlan,
+  options: A2aRequestOptions | undefined
+): Promise<unknown> {
+  const timeoutMs = options?.timeoutMs ?? A2A_REQUEST_TIMEOUT_MS;
+  const { signal, cleanup } = createTimeoutController(timeoutMs, options?.signal);
+  const startedAt = Date.now();
+  try {
+    let response: Response;
+    try {
+      response = await fetchImpl(plan.url, {
+        method: plan.method,
+        headers: plan.headers,
+        // exactOptionalPropertyTypes：仅 GET 无 body 时省略该键
+        ...(plan.body !== undefined ? { body: plan.body } : {}),
+        signal,
+      });
+    } catch (error) {
+      if (signal.aborted) {
+        throw new A2aClientError('network', abortErrorMessage(error));
+      }
+      throw new A2aClientError('network', `网络请求失败：${error instanceof Error ? error.message : String(error)}`);
+    }
+    onLog('debug', plan.logEvent, {
+      url: plan.url,
+      ...plan.logContext,
+      status: response.status,
+      durationMs: Date.now() - startedAt,
+    });
+    if (!response.ok) {
+      throw new A2aClientError('http', plan.httpErrorMessage(response.status));
+    }
+    try {
+      return await response.json();
+    } catch (error) {
+      throw new A2aClientError(
+        'invalid-response',
+        `${plan.jsonErrorLabel}：${error instanceof Error ? error.message : String(error)}`
+      );
+    }
+  } finally {
+    cleanup();
+  }
+}
+
+/** JSON-RPC 响应校验：error 对象分型为 rpc（保留 code），缺 result 分型为 invalid-response。 */
+function validateRpcResult(payload: unknown, method: string): unknown {
+  const rpc = payload as JsonRpcResponse;
+  if (rpc && typeof rpc === 'object' && rpc.error !== undefined && rpc.error !== null) {
+    const err = rpc.error;
+    const code = typeof err.code === 'number' ? err.code : undefined;
+    const message = typeof err.message === 'string' ? err.message : '远端返回未知 JSON-RPC 错误';
+    throw new A2aClientError('rpc', `远端 JSON-RPC 错误（${method}）：${message}`, code);
+  }
+  if (!(rpc && typeof rpc === 'object' && 'result' in rpc)) {
+    throw new A2aClientError('invalid-response', `响应缺少 result 字段（${method}）`);
+  }
+  return rpc.result;
+}
+
+/** 校验 task 型结果，校验异常统一包装为 invalid-response（三处调用点共用）。 */
+function toValidatedTask(result: unknown): A2aTask {
+  try {
+    return validateA2aTask(result);
+  } catch (error) {
+    throw new A2aClientError('invalid-response', error instanceof Error ? error.message : String(error));
+  }
 }
 
 /**
@@ -128,104 +236,52 @@ export function createA2aClient(deps: A2aClientDeps): A2aClient {
   // 由 WebIDL 替换为全局对象，行为与 llm-client.ts 一致）。
   const fetchImpl = deps.fetchImpl;
 
-  /** 校验 URL 是 HTTP(S)；统一 invalid-url 错误（设计 §5 D8 安全底线）。 */
-  const requireUrl = (url: string, what: string): string => {
-    if (!isHttpUrl(url)) {
-      throw new A2aClientError('invalid-url', `${what} 不是合法的 HTTP(S) 地址：${url}`);
-    }
-    return url;
-  };
-
-  /** 统一的 JSON-RPC POST：组包 → 超时控制 → 分型错误 → 响应校验。 */
   const rpcCall = async (
     endpoint: string,
     method: string,
     params: unknown,
     options?: A2aRequestOptions
   ): Promise<unknown> => {
-    const url = requireUrl(endpoint, 'A2A 端点');
-    const timeoutMs = options?.timeoutMs ?? A2A_REQUEST_TIMEOUT_MS;
-    const { signal, cleanup } = createTimeoutController(timeoutMs, options?.signal);
-    const requestId = takeRequestId();
-    const startedAt = Date.now();
-    try {
-      const headers: Record<string, string> = { 'Content-Type': 'application/json' };
-      if (options?.token) headers['Authorization'] = `Bearer ${options.token}`;
-      let response: Response;
-      try {
-        response = await fetchImpl(url, {
-          method: 'POST',
-          headers,
-          body: JSON.stringify({ jsonrpc: '2.0', id: requestId, method, params }),
-          signal,
-        });
-      } catch (error) {
-        if (signal.aborted) {
-          throw new A2aClientError('network', abortErrorMessage(error));
-        }
-        throw new A2aClientError('network', `网络请求失败：${error instanceof Error ? error.message : String(error)}`);
-      }
-      onLog('debug', 'a2a_rpc', { url, method, status: response.status, durationMs: Date.now() - startedAt });
-      if (!response.ok) {
-        throw new A2aClientError('http', `远端返回 HTTP ${response.status}（${method}）`);
-      }
-      let payload: unknown;
-      try {
-        payload = await response.json();
-      } catch (error) {
-        throw new A2aClientError('invalid-response', `响应不是合法 JSON：${error instanceof Error ? error.message : String(error)}`);
-      }
-      const rpc = payload as JsonRpcResponse;
-      if (rpc && typeof rpc === 'object' && rpc.error !== undefined && rpc.error !== null) {
-        const err = rpc.error;
-        const code = typeof err.code === 'number' ? err.code : undefined;
-        const message = typeof err.message === 'string' ? err.message : '远端返回未知 JSON-RPC 错误';
-        throw new A2aClientError('rpc', `远端 JSON-RPC 错误（${method}）：${message}`, code);
-      }
-      if (!(rpc && typeof rpc === 'object' && 'result' in rpc)) {
-        throw new A2aClientError('invalid-response', `响应缺少 result 字段（${method}）`);
-      }
-      return rpc.result;
-    } finally {
-      cleanup();
-    }
+    const url = requireHttpUrl(endpoint, 'A2A 端点');
+    const payload = await executeJsonRequest(
+      fetchImpl,
+      onLog,
+      {
+        url,
+        method: 'POST',
+        headers: buildAuthHeaders(options, { 'Content-Type': 'application/json' }),
+        body: JSON.stringify({ jsonrpc: '2.0', id: takeRequestId(), method, params }),
+        logEvent: 'a2a_rpc',
+        httpErrorMessage: (status) => `远端返回 HTTP ${status}（${method}）`,
+        jsonErrorLabel: '响应不是合法 JSON',
+        // 原埋点形态：a2a_rpc 的 method 键承载 JSON-RPC 方法名（非 HTTP 方法）
+        logContext: { method },
+      },
+      options
+    );
+    return validateRpcResult(payload, method);
   };
 
   return {
     async fetchAgentCard(cardUrl, options) {
-      const url = requireUrl(cardUrl, 'Agent Card URL');
-      const timeoutMs = options?.timeoutMs ?? A2A_REQUEST_TIMEOUT_MS;
-      const { signal, cleanup } = createTimeoutController(timeoutMs, options?.signal);
-      const startedAt = Date.now();
+      const url = requireHttpUrl(cardUrl, 'Agent Card URL');
+      const payload = await executeJsonRequest(
+        fetchImpl,
+        onLog,
+        {
+          url,
+          method: 'GET',
+          headers: buildAuthHeaders(options, { Accept: 'application/json' }),
+          logEvent: 'a2a_card',
+          httpErrorMessage: (status) => `Agent Card 抓取返回 HTTP ${status}`,
+          jsonErrorLabel: 'Agent Card 不是合法 JSON',
+        },
+        options
+      );
       try {
-        const headers: Record<string, string> = { Accept: 'application/json' };
-        if (options?.token) headers['Authorization'] = `Bearer ${options.token}`;
-        let response: Response;
-        try {
-          response = await fetchImpl(url, { method: 'GET', headers, signal });
-        } catch (error) {
-          if (signal.aborted) {
-            throw new A2aClientError('network', abortErrorMessage(error));
-          }
-          throw new A2aClientError('network', `网络请求失败：${error instanceof Error ? error.message : String(error)}`);
-        }
-        onLog('debug', 'a2a_card', { url, status: response.status, durationMs: Date.now() - startedAt });
-        if (!response.ok) {
-          throw new A2aClientError('http', `Agent Card 抓取返回 HTTP ${response.status}`);
-        }
-        let payload: unknown;
-        try {
-          payload = await response.json();
-        } catch (error) {
-          throw new A2aClientError('invalid-response', `Agent Card 不是合法 JSON：${error instanceof Error ? error.message : String(error)}`);
-        }
-        try {
-          return validateAgentCard(payload);
-        } catch (error) {
-          throw new A2aClientError('invalid-response', error instanceof Error ? error.message : String(error));
-        }
-      } finally {
-        cleanup();
+        return validateAgentCard(payload);
+      } catch (error) {
+        throw new A2aClientError('invalid-response', error instanceof Error ? error.message : String(error));
       }
     },
 
@@ -236,11 +292,7 @@ export function createA2aClient(deps: A2aClientDeps): A2aClient {
       }
       const record = result as Record<string, unknown>;
       if (record['kind'] === 'task' || record['status'] !== undefined) {
-        try {
-          return { task: validateA2aTask(result) };
-        } catch (error) {
-          throw new A2aClientError('invalid-response', error instanceof Error ? error.message : String(error));
-        }
+        return { task: toValidatedTask(result) };
       }
       if (record['kind'] === 'message' || record['parts'] !== undefined) {
         return { message: result as A2aMessage };
@@ -250,20 +302,12 @@ export function createA2aClient(deps: A2aClientDeps): A2aClient {
 
     async getTask(endpoint, taskId, options) {
       const result = await rpcCall(endpoint, 'tasks/get', { id: taskId }, options);
-      try {
-        return validateA2aTask(result);
-      } catch (error) {
-        throw new A2aClientError('invalid-response', error instanceof Error ? error.message : String(error));
-      }
+      return toValidatedTask(result);
     },
 
     async cancelTask(endpoint, taskId, options) {
       const result = await rpcCall(endpoint, 'tasks/cancel', { id: taskId }, options);
-      try {
-        return validateA2aTask(result);
-      } catch (error) {
-        throw new A2aClientError('invalid-response', error instanceof Error ? error.message : String(error));
-      }
+      return toValidatedTask(result);
     },
   };
 }
