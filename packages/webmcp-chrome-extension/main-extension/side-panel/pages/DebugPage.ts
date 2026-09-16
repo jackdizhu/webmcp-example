@@ -3,7 +3,7 @@
 // 模板用 h() 渲染函数（MV3 扩展页 CSP 禁止 eval，运行时字符串编译会白屏，见 issues/001）。
 import { computed, defineComponent, h, ref, watch, type VNode } from 'vue';
 import { serializeToolResult, type PageToolMeta } from '../../../core/page-tools-bridge';
-import PilotHello from '../components/sfc/PilotHello.vue';
+// import PilotHello from '../components/sfc/PilotHello.vue';
 import { t } from '../i18n';
 import { logEvent } from '../logger';
 import type { PageToolsClient } from '../panel-client';
@@ -315,14 +315,14 @@ export const DebugPage = defineComponent({
 
     // SFC 试点挂载（实验 docs/sfc-plugin-experiment-plan.md）：
     // 验证构建期编译 SFC 在 MV3 CSP 下渲染与响应式是否完整。
-    const renderSfcPilot = (): VNode =>
-      h('section', { class: 'debug-sfc-pilot' }, [h(PilotHello)]);
+    // const renderSfcPilot = (): VNode =>
+    //   h('section', { class: 'debug-sfc-pilot' }, [h(PilotHello)]);
 
     return () =>
       h(
         'div',
         { class: 'debugger', style: { display: props.active ? '' : 'none' } },
-        [renderForm(), renderResult(), renderHistory(), renderSfcPilot()]
+        [renderForm(), renderResult(), renderHistory()]
       );
   },
 });
