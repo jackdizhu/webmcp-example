@@ -21,22 +21,22 @@ import {
   type AgentLoopEvent,
   type SkillSummary,
 } from 'webmcp-agent-chat-core';
-import { createA2aToolHost, loadA2aTokens, saveA2aTokens } from './a2a-host';
-import { loadA2aConfig, saveA2aConfig, toA2aConfigSnapshot } from './a2a-config-store';
-import { createAgentProfileStore } from './agent-profile-store';
+import { createA2aToolHost, loadA2aTokens, saveA2aTokens } from './a2a/a2a-host';
+import { loadA2aConfig, saveA2aConfig, toA2aConfigSnapshot } from './a2a/a2a-config-store';
+import { createAgentProfileStore } from './a2a/agent-profile-store';
 import { initLocale, joinList, t } from './i18n';
-import { createHostSkillSource, getBuiltinSkillSummary } from './skill-assets';
-import { composeHandoffMessage, type DebugRun } from './debugger-core';
+import { createHostSkillSource, getBuiltinSkillSummary } from './runtime/skill-assets';
+import { composeHandoffMessage, type DebugRun } from './runtime/debugger-core';
 import {
   initLogger,
   logEvent,
   setConsoleOutput,
-} from './logger';
+} from './logger/logger';
 import {
   clearCurrentTrace,
   generateTraceId,
   setCurrentTrace,
-} from './trace-context';
+} from './logger/trace-context';
 import {
   attachBuiltinTools,
   attachInjectedTools,
@@ -46,9 +46,9 @@ import {
   toPanelSettings,
   type PageToolsClient,
   type PanelSettings,
-} from './panel-client';
-import { connectRelayStatus, type RelayStatusClient } from './relay-status-client';
-import { createRelayStatusStore } from './relay-status-store';
+} from './runtime/panel-client';
+import { connectRelayStatus, type RelayStatusClient } from './relay/relay-status-client';
+import { createRelayStatusStore } from './relay/relay-status-store';
 import { AppHeader } from './components/AppHeader';
 import { RelayStatusBar } from './components/RelayStatusBar';
 import { TabBar, type PanelPage } from './components/TabBar';

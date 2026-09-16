@@ -1,0 +1,21 @@
+/* 侧栏样式聚合入口：HTML 仅经单一 <link> 引入本文件。
+   @import 顺序即级联顺序（与 2026-09-16 拆分前的 side-panel.css 单文件规则顺序一致），不可乱序；
+   新增拆分文件时：先加文件，再在此按层级追加对应 @import（页面文件请排在 shared/base 之后）。
+   各文件职责见其头部注释；沙盘镜像：docs/theme-preview/styles/（预览用，非运行时）。 */
+
+/* 1. 设计令牌（颜色/圆角/动效/字阶/间距） */
+@import url('./tokens.css');
+/* 2. 全局基线（reset、按钮基线、聚焦环、滚动条、动效降级） */
+@import url('./base.css');
+/* 3. 多页面共用组件（subpage 框架、模式切换行、统一空态） */
+@import url('./shared.css');
+/* 4-5. 全局壳层：顶栏 + 页签栏 */
+@import url('./header.css');
+@import url('./tabs.css');
+/* 6-11. 各页签页面专属样式 */
+@import url('./chat.css');
+@import url('./relay.css');
+@import url('./datasource.css');
+@import url('./a2a.css');
+@import url('./settings.css');
+@import url('./debug.css');

@@ -1,0 +1,56 @@
+/* tools 调试页：调用表单 + 参数说明面板 + 结果卡片 + 历史。 */
+
+.debugger { flex: 1; overflow-y: auto; padding: 12px; display: flex; flex-direction: column; gap: 12px; }
+.debug-form { display: flex; flex-direction: column; gap: 8px; }
+.debug-form label { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: #374151; }
+.debug-form select, .debug-form textarea {
+  padding: 6px 8px; border: 1px solid var(--border-strong); border-radius: var(--radius-sm); font: inherit;
+}
+.debug-form textarea { font: 12px/1.5 var(--mono); resize: vertical; }
+.debug-desc { font-size: 11px; color: var(--muted); }
+.debug-error { font-size: 12px; color: var(--err); }
+.debug-actions { display: flex; gap: 8px; }
+
+/* 参数说明面板（inputSchema 解析结果，辅助构造合法参数） */
+.debug-params { display: flex; flex-direction: column; gap: 6px; }
+.debug-params h4 { margin: 0; font-size: 12px; color: #374151; }
+.debug-params-empty { margin: 0; font-size: 11px; color: var(--muted); }
+.debug-params-list {
+  list-style: none; margin: 0; padding: 0;
+  display: flex; flex-direction: column; gap: 6px;
+}
+.debug-param { border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 6px 8px; background: var(--surface); }
+.debug-param-head { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.debug-param-name { font-size: 12px; font-weight: 600; color: var(--text-strong); }
+.debug-param-type { font-size: 11px; color: #7c3aed; font-family: var(--mono); }
+.badge-required, .badge-optional {
+  font-size: 10px; border-radius: 999px; padding: 0 8px; line-height: 16px;
+}
+.badge-required { color: var(--err); background: #fee2e2; }
+.badge-optional { color: var(--muted); background: #eef2f7; }
+.debug-param-default { font-size: 10px; color: var(--muted); font-family: var(--mono); }
+.debug-param-desc { margin: 4px 0 0; font-size: 11px; color: #4b5563; }
+.debug-param-enum { margin: 2px 0 0; font-size: 11px; color: var(--muted); }
+
+.debug-result {
+  border: 1px solid var(--border); border-radius: var(--radius-md); padding: 8px 10px;
+  display: flex; flex-direction: column; gap: 6px;
+}
+.debug-result-failed { border-color: var(--err-border); background: var(--err-soft); }
+.debug-result header { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.badge-ok { font-size: 11px; color: var(--ok); font-variant-numeric: tabular-nums; }
+.badge-fail { font-size: 11px; color: var(--err); font-variant-numeric: tabular-nums; }
+.debug-result-text, .debug-result-json {
+  font: 11px/1.5 var(--mono);
+  white-space: pre-wrap; word-break: break-all; max-height: 180px; overflow-y: auto;
+}
+.debug-result summary { font-size: 12px; color: var(--muted); cursor: pointer; }
+
+.debug-history { display: flex; flex-direction: column; gap: 6px; }
+.debug-history h4 { font-size: 12px; color: #374151; font-weight: 600; }
+.debug-history-item {
+  display: flex; align-items: center; gap: 8px; padding: 4px 8px;
+  border: 1px solid var(--border); border-radius: var(--radius-sm); font-size: 12px;
+}
+.debug-history-name { flex: 1; color: var(--accent); font-weight: 500; font-family: var(--mono); }
+.debug-history-meta { color: var(--faint); font-size: 11px; }

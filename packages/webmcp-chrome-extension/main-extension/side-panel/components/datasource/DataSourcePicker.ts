@@ -7,8 +7,8 @@
 import { defineComponent, h, type PropType } from 'vue';
 import type { RelayTabSelection, RelayTabStatus } from '../../../../core/relay-status-protocol';
 import { t } from '../../i18n';
-import { logEvent } from '../../logger';
-import type { RelayStatusClient } from '../../relay-status-client';
+import { logEvent } from '../../logger/logger';
+import type { RelayStatusClient } from '../../relay/relay-status-client';
 
 export const DataSourcePicker = defineComponent({
   name: 'DataSourcePicker',

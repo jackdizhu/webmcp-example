@@ -9,7 +9,7 @@
 // 模板用 h() 渲染函数（MV3 扩展页 CSP 禁止运行时字符串编译，见 issues/001）。
 import { defineComponent, h, type PropType, type VNode } from 'vue';
 import { t } from '../../i18n';
-import type { PanelSettings } from '../../panel-client';
+import type { PanelSettings } from '../../runtime/panel-client';
 
 /** 固定长度全掩码：不保留任何明文片段，也不泄露真实长度（2026-09-13 由「首尾保留」改为全脱敏）。 */
 const API_KEY_MASK = '••••••••••';

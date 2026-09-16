@@ -11,7 +11,7 @@ import {
   type RelayStatusRequest,
   type RelayTabSelection,
   type RelayTabStatus,
-} from '../../core/relay-status-protocol';
+} from '../../../core/relay-status-protocol';
 
 export interface RelayStatusClient {
   /** 最近一次全量状态快照。 */

@@ -4,7 +4,7 @@
 // chrome.storage.local 键 `agentSkillOverrides` 中的同名技能覆写优先（用户可编辑版）。
 // 解析编排（覆写 → assets → 缺失报错）在 core 的 createSkillResolver，本模块只提供两个读取函数。
 import type { SkillDefinition, SkillSummary } from 'webmcp-agent-chat-core';
-import type { ProfileStorageLike } from './agent-profile-store';
+import type { ProfileStorageLike } from '../a2a/agent-profile-store';
 
 /**
  * 内置技能清单（打包期固定；P2 先内置一个指南类技能作为 L1/L2 链路的真实数据源）。

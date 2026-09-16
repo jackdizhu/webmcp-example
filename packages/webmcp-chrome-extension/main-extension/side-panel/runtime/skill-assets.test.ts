@@ -1,7 +1,7 @@
 // skill-assets 单测：内置清单摘要 + storage 覆写读取（含脏数据容错）。
 import { beforeEach, describe, expect, it } from 'vitest';
 import { BUILTIN_SKILLS, SKILL_OVERRIDES_STORAGE_KEY, createHostSkillSource, getBuiltinSkillSummary } from './skill-assets';
-import type { ProfileStorageLike } from './agent-profile-store';
+import type { ProfileStorageLike } from '../a2a/agent-profile-store';
 
 function createStorageStub(initial: Record<string, unknown> = {}) {
   const data: Record<string, unknown> = { ...initial };

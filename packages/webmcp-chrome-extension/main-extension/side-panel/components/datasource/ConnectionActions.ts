@@ -4,8 +4,8 @@
 // 模板用 h() 渲染函数（MV3 扩展页 CSP 禁止运行时字符串编译，见 issues/001）。
 import { defineComponent, h, ref, type PropType } from 'vue';
 import { t } from '../../i18n';
-import { logEvent } from '../../logger';
-import type { RelayStatusClient } from '../../relay-status-client';
+import { logEvent } from '../../logger/logger';
+import type { RelayStatusClient } from '../../relay/relay-status-client';
 
 export const ConnectionActions = defineComponent({
   name: 'ConnectionActions',

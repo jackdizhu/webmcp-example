@@ -125,7 +125,7 @@
 *   **禁止的是运行时模板，不是 SFC 本身**：扩展页 CSP 禁 `unsafe-eval`；SFC 在**构建期**由 `@vitejs/plugin-vue` 编译为渲染函数，运行时零 eval，CSP 安全（2026-09-16 实验已验证）。**运行时字符串 `template` 仍一律禁止**（`vue.esm-bundler` alias 同禁）；模板指令知识迁移为渲染函数写法：条件用三目 / `&&`，列表用 `arr.map()`。
 *   **SFC 组件已解锁，块顺序固定为 `template` → `script`**：
     *   视图结构放文件最前（`<template>` → `<script setup lang="ts">` →（禁用中的）`<style>`），样板 `components/sfc/PilotHello.vue`。
-    *   SFC **禁止携带 `<style>` 块**——样式仍集中 `side-panel.css` 单一文件，规避 tsdown CSS 资产不确定性。
+    *   SFC **禁止携带 `<style>` 块**——样式仍集中 `style/` 目录（按页面/组件拆分的纯 CSS 文件），规避 tsdown CSS 资产不确定性。
     *   新组件可用 SFC；存量 `h()` 组件并存、渐进迁移、不强迁。SFC 组件放 `components/sfc/`，与存量 `h()` 组件目录区分。
 *   **SFC 接入方式（路径 1 已验证可用）**：`vite.config.ts` 的 `sidePanelBase` 挂 `plugins: [vue()]`（`@vitejs/plugin-vue@^6.0.9`，devDependency），main/e2e 两个 side-panel 组共享生效。备选路径（未采用，留档）：② `@vue/compiler-sfc` 预编译外挂；③ side-panel 单独原生 Vite。历史背景：`vite-plus@0.1.24` 的 `PackUserConfig` 类型实际含 `plugins?: TsdownPluginOption`（`vite-plus-core/dist/tsdown/index-types.d.ts:2147`），推翻「vite-plus 不支持插件」的早期结论。
 *   **`vue` 一律默认 runtime 构建**，禁止 alias 到 `vue/dist/vue.esm-bundler.js`；Vue 特性旗标必须经构建 `define` 显式声明。
@@ -135,7 +135,7 @@
     *   **陷阱（已踩坑）**：push 进 `reactive` 数组必须 push **代理对象**，push raw 对象会原位变更绕过响应式（症状：工具响应不立即展示）。
     *   避免深层 `watch` 大对象，精确监听具体属性或用 `computed` 派生。
 *   **组件组织**：组件用 `h()` 函数 + 固定类名，放 `components/`；页面放 `pages/`；`App.ts` 只做编排。复用逻辑提取为 `useXxx` 组合函数。
-*   **样式**：侧栏视觉层只有一份独立样式表 `side-panel.css`（2026-09-15 由 side-panel.html 内联 `<style>` 拆出，HTML 经 `<link>` 引入，构建时两者一起拷入 dist）——组件零内联样式、零 scoped 样式，改样式只动该文件（不可能影响行为）；状态推导优先用 `:has()`，避免类名扩散。
+*   **样式**：侧栏视觉层在 `main-extension/side-panel/style/` 目录，按页面/组件拆分为独立 CSS 文件（2026-09-16 由单一 `side-panel.css` 拆出；更早的 2026-09-15 由 side-panel.html 内联 `<style>` 拆出）——`tokens`（设计令牌）/ `base`（reset、按钮基线、聚焦环、滚动条）/ `shared`（子页面框架、模式切换行、空态）/ `header` / `tabs` / `chat` / `relay` / `datasource` / `a2a` / `settings` / `debug` 共 11 个文件，另设 `index.css` 聚合入口（`@import` 按序引入全部文件），HTML 仅经单一 `<link>` 引入 `index.css`，**index.css 内 `@import` 顺序即级联顺序，不可乱序**（新增拆分文件须同步追加 import）；构建时 HTML + style 目录整体拷入 dist（`copySidePanelHtml`）。组件零内联样式、零 scoped 样式，改某页样式只动对应文件（不可能影响行为）；状态推导优先用 `:has()`，避免类名扩散。
 
 ## 4. chrome-extension：消息通信与注入规范
 
@@ -203,6 +203,7 @@
 
 | 版本 | 日期 | 变更内容 |
 | ---- | ---- | -------- |
+| 1.5.1 | 2026-09-16 | 侧栏样式按页面/组件拆分：`side-panel.css` → `style/` 目录 11 文件（tokens/base/shared/header/tabs/chat/relay/datasource/a2a/settings/debug）+ `index.css` 聚合入口（`@import` 按序引入，顺序即级联顺序）；HTML 单 `<link>` 引入 index.css、vite 拷贝逻辑/§3 样式条款同步更新（选择器集合校验 252=252 零丢失） |
 | 1.5.0 | 2026-09-16 | SFC 正式解锁：路径 1（vp pack + `@vitejs/plugin-vue@^6.0.9`）构建期验证通过（dist 无 `new Function`/`eval`，试点组件编译痕迹在）；§3 新增 SFC 组件规范——**块顺序固定 `template` → `script`**、禁 `<style>`、放 `components/sfc/`、与存量 `h()` 并存渐进迁移；AI 生成指令同步 |
 | 1.4.1 | 2026-09-15 | 侧栏样式拆分为独立 `side-panel.css`（HTML 13 行 + CSS 562 行，同步修正「1515 行超阈值」的不实记忆）；§3 样式条款与 SFC 路径表述同步更新 |
 | 1.4.0 | 2026-09-15 | §3 澄清「禁止 SFC」的真实边界：CSP 禁的是运行时模板编译，构建期 SFC 本身安全；修正「vite-plus 不支持插件」的早期结论（PackUserConfig 类型实际含 `plugins?: TsdownPluginOption`），新增三条 SFC 启用路径与共同红线 |

@@ -1,0 +1,28 @@
+/* 页签栏：横向滚动 + 激活态 + 执行锁（入口禁用 + 终止区）。 */
+
+/* 页签横向滚动：空间充足时均分填满（flex-grow），不足时不收缩、容器出横向滚动条 */
+.tabs {
+  display: flex; align-items: center; border-bottom: 1px solid var(--border);
+  overflow-x: auto; scrollbar-width: thin; background: var(--bg);
+}
+.tabs button {
+  flex: 1 0 auto; padding: 8px 10px; border: none; border-radius: 0; background: transparent;
+  color: var(--muted); font-size: 13px; cursor: pointer; border-bottom: 2px solid transparent;
+  white-space: nowrap;
+  transition: color var(--dur-fast) var(--ease-out), border-color var(--dur-fast) var(--ease-out);
+}
+.tabs button:hover:not(:disabled) { color: var(--accent); background: var(--surface); }
+.tabs .tab-active { color: var(--accent); font-weight: 600; border-bottom-color: var(--accent); }
+/* 执行锁：入口禁用 + 右侧终止区 */
+.tabs-locked button { cursor: not-allowed; }
+.tabs-locked button:not(.tabs-abort) { opacity: 0.55; }
+.tabs-lock-area {
+  display: flex; align-items: center; gap: 6px; flex: none; padding-right: 8px;
+}
+.tabs-lock-label { font-size: 11px; color: var(--warn); white-space: nowrap; }
+.tabs-abort {
+  flex: none; background: var(--err); color: #ffffff;
+  padding: 4px 10px; font-size: 12px; border-radius: var(--radius-sm);
+}
+.tabs-abort:hover:not(:disabled) { background: #8f2424; }
+.tabs-abort:disabled { opacity: 0.5; }

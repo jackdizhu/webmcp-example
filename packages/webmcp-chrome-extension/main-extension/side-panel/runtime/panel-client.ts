@@ -15,13 +15,13 @@ import {
   type PageToolMeta,
   type PageToolsRequest,
   type PageToolsResponse,
-} from '../../core/page-tools-bridge';
+} from '../../../core/page-tools-bridge';
 import {
   executeBuiltinTool,
   isBuiltinTool,
   mergeBuiltinWithPageTools,
   type BuiltinToolContext,
-} from '../../core/builtin-tools';
+} from '../../../core/builtin-tools';
 import { DEFAULT_SYSTEM_PROMPT } from 'webmcp-agent-chat-core';
 
 export interface PageToolsClient {

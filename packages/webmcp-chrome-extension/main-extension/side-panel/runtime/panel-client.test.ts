@@ -6,8 +6,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { attachBuiltinTools, connectPageTools, loadSettings, saveSettings } from './panel-client';
 import type { PageToolsClient } from './panel-client';
-import type { PageToolMeta, PageToolsRequest, PageToolsResponse } from '../../core/page-tools-bridge';
-import { GET_DOCUMENT_INFO_TOOL_NAME } from '../../core/builtin-tools';
+import type { PageToolMeta, PageToolsRequest, PageToolsResponse } from '../../../core/page-tools-bridge';
+import { GET_DOCUMENT_INFO_TOOL_NAME } from '../../../core/builtin-tools';
 
 type MessageListener = (message: unknown) => void;
 type DisconnectListener = () => void;

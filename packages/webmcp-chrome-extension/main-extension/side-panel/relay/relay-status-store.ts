@@ -7,12 +7,12 @@
 //
 // 日志经 options.onLog 注入（缺省 logEvent），与共享库同款解耦手法，便于单测收集。
 import { computed, ref, watch, type ComputedRef, type Ref } from 'vue';
-import { logEvent } from './logger';
+import { logEvent } from '../logger/logger';
 import type {
   RelayInvokeLogEntry,
   RelayTabSelection,
   RelayTabStatus,
-} from '../../core/relay-status-protocol';
+} from '../../../core/relay-status-protocol';
 import type { RelayStatusClient } from './relay-status-client';
 
 type LogFn = typeof logEvent;
