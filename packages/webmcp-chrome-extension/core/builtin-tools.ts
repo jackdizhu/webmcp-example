@@ -13,14 +13,14 @@
 //
 // 纯逻辑 + 依赖注入（无顶层 chrome 访问），单测经 context 注入桩。
 //
-// 两条产出路径的实现位置刻意不同（2026-09-12 调整）：
-// - 结构大纲（outline）：**页面内**由活体 DOM 生成，只取 tag/id/class，不做标签过滤、
-//   不做 sanitize —— 输出天然安全，且省掉 outerHTML 的大字符串跨上下文传输；
-// - 正文纯文本（text）：扩展上下文用 sanitize-html 去标签后折叠空白（去标签须走
-//   sanitize 而非正则，否则 script/style 的内容会被当成正文）。
-// 故 sanitize-html 只剩 text 一处消费点；页面内采集函数必须自包含（executeScript
-// 序列化执行，函数体不得引用模块级标识符）。
-import sanitizeHtml from 'sanitize-html';
+// 两条产出路径的实现位置刻意不同（2026-09-12 调整；2026-09-16 includeText → includeMinText）：
+// - 结构大纲（outline）与最小化文本大纲（minText）：**页面内**由活体 DOM 生成（共享同一
+//   次遍历/文本预算），只取标签/文本，不做 sanitize —— 输出天然安全，且省掉 outerHTML 的
+//   大字符串跨上下文传输；minText 与 outline 同为行式格式，仅降级为纯标签名并剔除空元素行；
+// - 旧正文纯文本路径（扩展上下文以 sanitize-html 清洗 outerHTML）已随 includeMinText 取代
+//   includeText 一并移除，sanitize-html 依赖不再使用；
+// - includeNonTextElements 参数已移除（2026-09-16）：非文本子树**永久排除**，不再开放开关。
+// 页面内采集函数必须自包含（executeScript 序列化执行，函数体不得引用模块级标识符）。
 
 // ---- 工具名 ----
 
@@ -42,19 +42,18 @@ export interface BuiltinToolDescriptor {
 
 /**
  * 结果字段上限（双端一致）。
- * - outline：页面内生成时已按节点/深度上限收敛，此处仅作最终字符兜底；
- * - text：清洗压缩后的正文纯文本上限。
+ * outline / minText 均在页面内生成时已按节点上限与文本预算收敛，此处仅作最终字符兜底。
  */
 export const DOC_OUTLINE_MAX_CHARS = 32_000;
-export const DOC_TEXT_MAX_CHARS = 8_000;
+export const DOC_MIN_TEXT_MAX_CHARS = 32_000;
 
 /**
- * 大纲默认排除的非文本 / 低信息量子树标签（2026-09-12 决策）。
+ * 大纲 / 最小化文本大纲排除的非文本 / 低信息量子树标签（2026-09-12 决策）。
  *
  * 判据：内容以图形、二进制资源或代码为主 —— 对「页面结构与文本」没有信息量，
  * 却可能单标签就贡献成百上千个节点（典型：图标库 / 图表的 `<svg>`、内联
  * `<script>`/`<style>` 的代码文本）。
- * 需要时可经 `includeNonTextElements=true` 全量保留。
+ * 2026-09-16 起**永久排除**：includeNonTextElements 参数已移除，不提供保留开关。
  *
  * 注：注入函数内保存同一清单的字面量副本（executeScript 序列化执行，不能引用本常量）。
  */
@@ -76,9 +75,25 @@ export const DOC_OUTLINE_FORMAT_HINT =
   '选择器为 tag#id.class1.class2（无 id/class 时仅 tag），文本为该元素的直接文本节点' +
   '（折叠空白、单节点最多 80 字符、全页文本总量上限 8000 字符，耗尽后仅保留结构行并追加说明）；' +
   '**不输出缩进空格**（层级由深度数字表达，避免深层页面出现大段前导空白）；' +
-  '默认排除非文本子树（svg/canvas/math、video/audio/iframe 等媒体嵌入、' +
-  'script/style/noscript/template 代码模板），需要时可用 includeNonTextElements=true 保留；' +
+  '非文本子树始终排除（svg/canvas/math、video/audio/iframe 等媒体嵌入、' +
+  'script/style/noscript/template 代码模板）；' +
   '仅保留结构与 id/class 及直接文本，天然不含脚本内容/事件属性等不安全内容';
+
+/**
+ * 最小化文本大纲的形态说明（供工具描述与文档引用，数值上限内联在注入函数内 —— 注入函数
+ * 必须自包含，不能引用模块级标识符）。
+ *
+ * 实现口径：与 outline 共享同一次 DOM 遍历与文本预算（复用 includeOutline 功能），
+ * 在其行结构之上进一步降级 —— 选择器只留标签名（移除 id/class）、无文本行（空元素节点）剔除。
+ */
+export const DOC_MIN_TEXT_FORMAT_HINT =
+  '最小化文本大纲：与元素大纲同一行式格式「深度 标签 文本」（深度为整数层级，根 html 为 0，' +
+  '**不输出缩进空格**），但选择器只保留标签名（移除 id/class），并剔除无文本的行' +
+  '（空元素节点，如 br/img/空 div 及纯结构容器行）；' +
+  '文本为元素直接文本节点，折叠空白、单节点最多 80 字符、全页文本总量上限 8000 字符，' +
+  '耗尽后追加说明行；' +
+  '非文本子树始终排除（与大纲同一排除集：svg/canvas/math、媒体嵌入、script/style 等）；' +
+  '天然不含脚本内容/事件属性等不安全内容';
 
 export const BUILTIN_TOOLS: BuiltinToolDescriptor[] = [
   {
@@ -87,8 +102,8 @@ export const BUILTIN_TOOLS: BuiltinToolDescriptor[] = [
       '获取当前选中页签（默认为打开侧栏时的活动页签）的文档信息。' +
       '返回数组，每个选中页签一个元素，含 URL、标题、readyState、字符集、meta、' +
       '标题大纲、DOM/链接/图片等计数。' +
-      `可选返回元素结构大纲（includeOutline，${DOC_OUTLINE_FORMAT_HINT}）与清洗压缩后的` +
-      '正文纯文本（includeText）；两开关默认关闭，防止无效大文本污染上下文。',
+      `可选返回元素结构大纲（includeOutline，${DOC_OUTLINE_FORMAT_HINT}）与最小化` +
+      '文本大纲（includeMinText）；两开关默认关闭，防止无效大文本污染上下文。',
     inputSchema: {
       type: 'object',
       properties: {
@@ -97,15 +112,9 @@ export const BUILTIN_TOOLS: BuiltinToolDescriptor[] = [
           description:
             `返回页面元素结构大纲（${DOC_OUTLINE_FORMAT_HINT}；截断上限 ${DOC_OUTLINE_MAX_CHARS} 字符），默认 false`,
         },
-        includeText: {
+        includeMinText: {
           type: 'boolean',
-          description: `返回清洗并压缩空白后的正文纯文本（截断上限 ${DOC_TEXT_MAX_CHARS} 字符），默认 false`,
-        },
-        includeNonTextElements: {
-          type: 'boolean',
-          description:
-            '结构大纲是否保留非文本子树（svg/canvas/math、媒体与外部嵌入、script/style 等）；' +
-            `默认 false = 排除 ${DOC_OUTLINE_NON_TEXT_TAGS.join('/')} 以节省空间，仅在明确需要图形或脚本节点时才开启`,
+          description: `返回页面最小化文本大纲（${DOC_MIN_TEXT_FORMAT_HINT}；截断上限 ${DOC_MIN_TEXT_MAX_CHARS} 字符），默认 false`,
         },
       },
       additionalProperties: false,
@@ -125,7 +134,7 @@ export function mergeBuiltinWithPageTools<T extends { name: string }>(
 
 // ---- 页面内采集（自包含，经 chrome.scripting.executeScript 注入执行）----
 
-/** 页面内采集的原始文档信息（outline / rawHtml 均按需采集，仅供扩展上下文加工）。 */
+/** 页面内采集的原始文档信息（outline / minText 均按需在页面内直接生成）。 */
 export interface RawDocumentInfo {
   url: string;
   title: string;
@@ -140,18 +149,16 @@ export interface RawDocumentInfo {
   headings: Array<{ level: number; text: string }>;
   /** 元素结构大纲（includeOutline=true 时采集）。 */
   outline?: string;
-  /** outerHTML 原文（仅 text 抽取需要，不在工具结果里出现）。 */
-  rawHtml?: string;
+  /** 最小化文本大纲（includeMinText=true 时采集）。 */
+  minText?: string;
 }
 
 /** 页面内采集开关（注入函数的入参，须 JSON 可序列化）。 */
 export interface DocumentCollectOptions {
   /** 生成元素大纲（每行 `<深度> <选择器>`；根 html 深度 0）。 */
   outline: boolean;
-  /** 采集 outerHTML 原文（扩展上下文据此抽取纯文本）。 */
-  rawHtml: boolean;
-  /** 大纲是否保留非文本子树（svg/script/media 等；默认 false = 排除）。 */
-  includeNonTextElements: boolean;
+  /** 生成最小化文本大纲（复用大纲采集，仅标签名 + 直接文本、剔除空元素行）。 */
+  minText: boolean;
 }
 
 /**
@@ -187,13 +194,21 @@ export function collectDocumentInfoInPage(options: DocumentCollectOptions): RawD
     'video', 'audio', 'picture', 'source', 'track', 'object', 'embed', 'iframe', 'frame',
     'script', 'style', 'noscript', 'template',
   ];
-  const keepNonText = options.includeNonTextElements === true;
 
-  /** 生成元素大纲（每行 `<depth> <selector> [text]`；根 html 深度为 0）。 */
-  const buildOutline = (): string => {
+  /**
+   * 大纲行采集（两条产出路径的共享源，2026-09-16 抽取）：先序遍历活体 DOM，
+   * 每元素一行「深度 + 选择器(tag#id.class) + 直接文本」。
+   * 文本加工（折叠空白、单节点 80 字符截断、全页 8000 字符预算、耗尽后仅结构行）
+   * 与非文本子树静默排除都在这里完成，outline / minText 不再各自重复语义。
+   */
+  const collectOutlineLines = (): {
+    lines: Array<{ depth: number; selector: string; text: string }>;
+    truncated: boolean;
+    textExhausted: boolean;
+  } => {
     const root = document.documentElement ?? document.body;
-    if (!root) return '';
-    const lines: string[] = [];
+    if (!root) return { lines: [], truncated: false, textExhausted: false };
+    const lines: Array<{ depth: number; selector: string; text: string }> = [];
     let truncated = false;
     let textBudget = MAX_TEXT_TOTAL;
     let textExhausted = false;
@@ -228,31 +243,68 @@ export function collectDocumentInfoInPage(options: DocumentCollectOptions): RawD
         return;
       }
       const tag = el.tagName.toLowerCase();
-      if (!keepNonText && NON_TEXT_TAGS.indexOf(tag) >= 0) return; // 静默排除整棵子树
-      let line = `${String(depth)} ${selectorOf(el)}`;
+      if (NON_TEXT_TAGS.indexOf(tag) >= 0) return; // 静默排除整棵子树（永久排除，无保留开关）
+      let text = '';
       if (!textExhausted) {
-        const text = directTextOf(el);
-        if (text.length > 0) {
-          const clipped = text.slice(0, Math.min(text.length, MAX_TEXT_PER_NODE, textBudget));
-          line += ` ${clipped}${clipped.length < text.length ? '…' : ''}`;
+        const raw = directTextOf(el);
+        if (raw.length > 0) {
+          const clipped = raw.slice(0, Math.min(raw.length, MAX_TEXT_PER_NODE, textBudget));
+          text = clipped.length < raw.length ? `${clipped}…` : clipped;
           textBudget -= clipped.length;
           if (textBudget <= 0) textExhausted = true;
         }
       }
-      lines.push(line);
+      lines.push({ depth, selector: selectorOf(el), text });
       for (const child of Array.from(el.children)) walk(child, depth + 1);
     };
 
     walk(root, 0);
+    return { lines, truncated, textExhausted };
+  };
+
+  /** 生成元素大纲（每行 `<depth> <selector> [text]`；根 html 深度为 0）。 */
+  const buildOutline = (): string => {
+    const { lines, truncated, textExhausted } = collectOutlineLines();
+    const out = lines.map((line) =>
+      line.text.length > 0
+        ? `${String(line.depth)} ${line.selector} ${line.text}`
+        : `${String(line.depth)} ${line.selector}`
+    );
     if (truncated) {
-      lines.push(`…(已达节点上限 ${String(MAX_NODES)} 行，其余未展开)`);
+      out.push(`…(已达节点上限 ${String(MAX_NODES)} 行，其余未展开)`);
     }
     if (textExhausted) {
-      lines.push(
+      out.push(
         `…(文本预算已用尽（全页文本上限 ${String(MAX_TEXT_TOTAL)} 字符），后续元素文本未收录)`
       );
     }
-    return lines.join('\n');
+    return out.join('\n');
+  };
+
+  /**
+   * 生成最小化文本大纲（2026-09-16 新增，复用 includeOutline 采集）：与 outline 同一行式
+   * 格式「深度 文本」，在此之上进一步降级 —— 选择器只留标签名（移除 id/class 与截断
+   * 省略号）、无文本行（空元素节点）整体剔除；说明行与 outline 同措辞（预算耗尽 /
+   * 节点上限时保留感知），剔除空行不影响说明行的出现。
+   */
+  const buildMinText = (): string => {
+    const { lines, truncated, textExhausted } = collectOutlineLines();
+    // 选择器形如 tag#id.c1.c2（超长时以 … 结尾）：#/. 起的尾部全部丢弃即得纯标签名
+    const tagOf = (selector: string): string => selector.replace(/[.#].*$/, '');
+    const out: string[] = [];
+    for (const line of lines) {
+      if (line.text.length === 0) continue; // 空元素节点剔除（无直接文本的行不进入 minText）
+      out.push(`${String(line.depth)} ${tagOf(line.selector)} ${line.text}`);
+    }
+    if (truncated) {
+      out.push(`…(已达节点上限 ${String(MAX_NODES)} 行，其余未展开)`);
+    }
+    if (textExhausted) {
+      out.push(
+        `…(文本预算已用尽（全页文本上限 ${String(MAX_TEXT_TOTAL)} 字符），后续元素文本未收录)`
+      );
+    }
+    return out.join('\n');
   };
 
   const doc = document;
@@ -289,62 +341,15 @@ export function collectDocumentInfoInPage(options: DocumentCollectOptions): RawD
     headings,
   };
   if (options.outline) info.outline = buildOutline();
-  if (options.rawHtml) info.rawHtml = doc.documentElement.outerHTML;
+  if (options.minText) info.minText = buildMinText();
   return info;
 }
 
-// ---- 文本抽取（扩展上下文执行；sanitize-html 无 DOM 依赖，可打进 IIFE）----
-//
-// 注意：结构大纲不在这里加工 —— 它在页面内直接由活体 DOM 生成（只取 tag/id/class，
-// 天然安全且更省传输）。sanitize-html 仅用于把 outerHTML 原文降级为正文纯文本。
+// ---- 截断工具 ----
 
-/** 超长值截断并标注省略长度。 */
+/** 超长值截断并标注省略长度（outline / minText 两条产出路径共用的最终字符兜底）。 */
 export function truncateWithMarker(value: string, maxChars: number): string {
   return value.length > maxChars ? `${value.slice(0, maxChars)}…(+${value.length - maxChars})` : value;
-}
-
-/**
- * 纯文本抽取默认丢弃内容的标签（与大纲的非文本排除集同源；`sanitize-html` 的
- * `nonTextTags` 是**整表覆盖**语义，故必须原样带上它的默认项）。
- */
-export const SANITIZE_NON_TEXT_TAGS = [
-  // sanitize-html 默认项（覆盖时必须保留）
-  'script', 'style', 'textarea', 'option', 'xmp',
-  // 图形 / 媒体 / 外部嵌入 / 模板（与 DOC_OUTLINE_NON_TEXT_TAGS 对应）
-  'svg', 'canvas', 'math', 'video', 'audio', 'picture', 'source', 'track',
-  'object', 'embed', 'iframe', 'frame', 'noscript', 'template',
-];
-
-/** 纯文本抽取选项。 */
-export interface DocumentTextOptions {
-  /** 截断上限（默认 DOC_TEXT_MAX_CHARS）。 */
-  maxChars?: number;
-  /**
-   * 是否保留非文本子树内文本（svg/canvas 图形、媒体、代码模板），默认 false。
-   * 与大纲的 `includeNonTextElements` 同一语义，保证两路产出对同一开关行为一致。
-   */
-  includeNonTextElements?: boolean;
-}
-
-/**
- * 从 outerHTML 原文抽取正文纯文本：sanitize-html 去标签后折叠连续空白并按上限截断。
- * 走 sanitize 而非正则去标签，是为了同时按 nonTextTags 丢弃 script/style/option 等
- * 非正文内容（否则脚本代码、下拉项会混进正文）。
- */
-export function sanitizeDocumentText(
-  rawHtml: string,
-  options: DocumentTextOptions = {}
-): string {
-  return truncateWithMarker(
-    sanitizeHtml(rawHtml, {
-      allowedTags: [],
-      allowedAttributes: {},
-      nonTextTags: options.includeNonTextElements === true ? [] : SANITIZE_NON_TEXT_TAGS,
-    })
-      .replace(/\s+/g, ' ')
-      .trim(),
-    options.maxChars ?? DOC_TEXT_MAX_CHARS
-  );
 }
 
 // ---- 工具执行 ----
@@ -365,8 +370,8 @@ export interface DocumentInfoEntry {
   headings: Array<{ level: number; text: string }>;
   /** 元素结构大纲（includeOutline=true 时存在）。 */
   outline?: string;
-  /** 正文纯文本（includeText=true 时存在）。 */
-  text?: string;
+  /** 最小化文本大纲（includeMinText=true 时存在）。 */
+  minText?: string;
   error?: string;
 }
 
@@ -443,18 +448,16 @@ export async function executeBuiltinTool(
     throw new Error(`未知内置工具：${name}`);
   }
   const includeOutline = args?.['includeOutline'] === true;
-  const includeText = args?.['includeText'] === true;
-  const includeNonTextElements = args?.['includeNonTextElements'] === true;
+  const includeMinText = args?.['includeMinText'] === true;
   const tabIds = await context.getSelectedTabIds();
   const collect = context.collectFromTab ?? defaultCollectFromTab;
   const entries: DocumentInfoEntry[] = [];
   for (const tabId of tabIds) {
     try {
-      // outline 在页面内生成（无需 outerHTML）；rawHtml 仅为 text 抽取所需
+      // outline / minText 共用页面内大纲采集，均无需 outerHTML
       const raw = await collect(tabId, {
         outline: includeOutline,
-        rawHtml: includeText,
-        includeNonTextElements,
+        minText: includeMinText,
       });
       if (!raw) {
         entries.push({ tabId, url: '', title: '', readyState: '', characterSet: '', contentType: '', doctype: '', viewport: '', lang: '', meta: {}, counts: { domNodes: 0, links: 0, images: 0, scripts: 0, iframes: 0 }, headings: [], error: '页面采集无返回' });
@@ -478,8 +481,8 @@ export async function executeBuiltinTool(
       if (includeOutline && raw.outline !== undefined) {
         entry.outline = truncateWithMarker(raw.outline, DOC_OUTLINE_MAX_CHARS);
       }
-      if (includeText && raw.rawHtml !== undefined) {
-        entry.text = sanitizeDocumentText(raw.rawHtml, { includeNonTextElements });
+      if (includeMinText && raw.minText !== undefined) {
+        entry.minText = truncateWithMarker(raw.minText, DOC_MIN_TEXT_MAX_CHARS);
       }
       entries.push(entry);
     } catch (error) {

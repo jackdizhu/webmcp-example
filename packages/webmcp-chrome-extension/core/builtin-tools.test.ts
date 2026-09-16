@@ -1,16 +1,15 @@
-// builtin-tools 单测：注册表合并、大纲生成（jsdom 真实 DOM）、文本抽取、执行器
+// builtin-tools 单测：注册表合并、大纲与最小化 HTML 生成（jsdom 真实 DOM）、执行器
 // （依赖注入，不依赖 chrome 全局）。
 import { describe, expect, it, vi } from 'vitest';
 import {
   BUILTIN_TOOLS,
   collectDocumentInfoInPage,
+  DOC_MIN_TEXT_MAX_CHARS,
   DOC_OUTLINE_MAX_CHARS,
-  DOC_TEXT_MAX_CHARS,
   executeBuiltinTool,
   GET_DOCUMENT_INFO_TOOL_NAME,
   isBuiltinTool,
   mergeBuiltinWithPageTools,
-  sanitizeDocumentText,
   toBuiltinToolResult,
   truncateWithMarker,
   type BuiltinToolResult,
@@ -51,15 +50,11 @@ function makeRaw(overrides: Partial<RawDocumentInfo> = {}): RawDocumentInfo {
 }
 
 describe('内置工具注册表', () => {
-  it('BUILTIN_TOOLS 含 get_document_info，schema 声明三个默认关闭的开关', () => {
+  it('BUILTIN_TOOLS 含 get_document_info，schema 声明两个默认关闭的开关', () => {
     const tool = BUILTIN_TOOLS.find((t) => t.name === GET_DOCUMENT_INFO_TOOL_NAME);
     expect(tool).toBeDefined();
     const properties = (tool!.inputSchema as { properties: Record<string, unknown> }).properties;
-    expect(Object.keys(properties).sort()).toEqual([
-      'includeNonTextElements',
-      'includeOutline',
-      'includeText',
-    ]);
+    expect(Object.keys(properties).sort()).toEqual(['includeMinText', 'includeOutline']);
   });
 
   it('isBuiltinTool 仅识别内置命名空间', () => {
@@ -76,49 +71,84 @@ describe('内置工具注册表', () => {
   });
 });
 
-describe('sanitizeDocumentText', () => {
-  it('去标签保留正文，丢弃 script/style 内容', () => {
-    const text = sanitizeDocumentText(
-      '<html><head><title>T</title><style>.a{color:red}</style></head><body onload="evil()"><h1>标题</h1><script>alert(1)</script><p class="x">正文</p></body></html>'
-    );
-    expect(text).toContain('标题');
-    expect(text).toContain('正文');
-    expect(text).not.toContain('alert');
-    expect(text).not.toContain('color:red');
-  });
-
-  it('折叠连续空白', () => {
-    expect(sanitizeDocumentText('<p>你好\n  世界\t! </p>')).toBe('你好 世界 !');
-  });
-
-  it('默认丢弃非文本子树内文本（svg / option / noscript）', () => {
-    const text = sanitizeDocumentText(
-      '<body><p>正文</p><svg><text>图表标签</text></svg><select><option>选项A</option></select><noscript>无脚本提示</noscript></body>'
-    );
-    expect(text).toContain('正文');
-    expect(text).not.toContain('图表标签');
-    expect(text).not.toContain('选项A');
-    expect(text).not.toContain('无脚本提示');
-  });
-
-  it('includeNonTextElements=true 时保留非文本子树文本', () => {
-    const text = sanitizeDocumentText('<body><p>正文</p><svg><text>图表标签</text></svg></body>', {
-      includeNonTextElements: true,
-    });
-    expect(text).toContain('正文');
-    expect(text).toContain('图表标签');
-  });
-
-  it('超长内容按上限截断并标注省略长度', () => {
-    const raw = `<p>${'x'.repeat(DOC_TEXT_MAX_CHARS + 100)}</p>`;
-    const text = sanitizeDocumentText(raw);
-    expect(text.length).toBeLessThanOrEqual(DOC_TEXT_MAX_CHARS + 15);
-    expect(text).toContain('…(+');
-  });
-
-  it('truncateWithMarker 仅在超限时追加省略标记', () => {
+describe('truncateWithMarker', () => {
+  it('仅在超限时追加省略标记', () => {
     expect(truncateWithMarker('abc', 5)).toBe('abc');
     expect(truncateWithMarker('abcdef', 5)).toBe('abcde…(+1)');
+  });
+});
+
+describe('collectDocumentInfoInPage（最小化文本大纲，jsdom 真实 DOM）', () => {
+  it('与大纲同行式格式：深度 + 纯标签名 + 直接文本，移除 id/class', () => {
+    setDocumentHtml(
+      '<head><title>T</title></head><body><div id="app" class="container main"><span class="t">x</span><p>正文</p></div></body>'
+    );
+    const info = collectDocumentInfoInPage({ outline: false, minText: true });
+
+    // 与 outline 行式同构，但选择器只留标签名、无文本行剔除（空元素节点）
+    expect(info.minText).toBe('2 title T\n3 span x\n3 p 正文');
+    expect(info.minText).not.toContain('#app');
+    expect(info.minText).not.toContain('.container');
+    expect(info.minText).not.toContain('.t');
+  });
+
+  it('空元素行剔除：无文本行不输出（br/img/空元素/纯结构容器）', () => {
+    setDocumentHtml(
+      '<body><div><span></span><br><img></div><div>   </div><p>正文</p><ul><li>项</li></ul></body>'
+    );
+    const info = collectDocumentInfoInPage({ outline: false, minText: true });
+
+    expect(info.minText).toBe('2 p 正文\n3 li 项');
+  });
+
+  it('属性值不泄露、非文本子树静默排除', () => {
+    setDocumentHtml(
+      '<head><style>.a{color:red}</style></head>' +
+        '<body><p>你好 <b>世界</b>！</p><a class="link" href="https://x.com/?token=secret" onclick="evil()">去</a>' +
+        '<svg><text>图表标签</text></svg><script>evil()</script></body>'
+    );
+    const info = collectDocumentInfoInPage({ outline: false, minText: true });
+
+    expect(info.minText).toContain('2 p 你好 ！');
+    expect(info.minText).toContain('3 b 世界');
+    expect(info.minText).toContain('2 a 去');
+    expect(info.minText).not.toContain('href');
+    expect(info.minText).not.toContain('secret');
+    expect(info.minText).not.toContain('onclick');
+    expect(info.minText).not.toContain('evil()');
+    expect(info.minText).not.toContain('color:red');
+    expect(info.minText).not.toContain('图表标签');
+    expect(info.minText).not.toContain('svg');
+  });
+
+  it('单节点文本超 80 字符截断并加省略号', () => {
+    setDocumentHtml(`<body><p>${'字'.repeat(100)}</p></body>`);
+    const info = collectDocumentInfoInPage({ outline: false, minText: true });
+
+    expect(info.minText).toContain(`2 p ${'字'.repeat(80)}…`);
+  });
+
+  it('全页文本预算耗尽：后续文本行被剔除，末尾追加说明行', () => {
+    // 120 个节点 × 80 字符截断文本 = 9600 字符 > 8000 预算
+    setDocumentHtml(
+      `<body>${Array.from({ length: 120 }, () => `<p>${'字'.repeat(100)}</p>`).join('')}</body>`
+    );
+    const info = collectDocumentInfoInPage({ outline: false, minText: true });
+    const lines = info.minText!.split('\n');
+
+    // 预算耗尽说明行在末尾（与大纲同措辞，用户决策：预算耗尽要有感知）
+    expect(lines.at(-1)).toBe('…(文本预算已用尽（全页文本上限 8000 字符），后续元素文本未收录)');
+    // 前 100 个 p 带文本（各 80 字符截断），预算耗尽后的 20 个为无文本行被剔除
+    expect(lines.filter((line) => line === `2 p ${'字'.repeat(80)}…`).length).toBe(100);
+  });
+
+  it('节点上限触发：说明行与 outline 同措辞', () => {
+    setDocumentHtml(`<body><div id="root">${'<span>字</span>'.repeat(1300)}</div></body>`);
+    const info = collectDocumentInfoInPage({ outline: false, minText: true });
+    const lines = info.minText!.split('\n');
+
+    expect(lines.at(-1)).toBe('…(已达节点上限 1200 行，其余未展开)');
+    expect(lines).toContain('3 span 字');
   });
 });
 
@@ -129,8 +159,7 @@ describe('collectDocumentInfoInPage（元素大纲，jsdom 真实 DOM）', () =>
     );
     const info = collectDocumentInfoInPage({
       outline: true,
-      rawHtml: false,
-      includeNonTextElements: false,
+      minText: false,
     });
     const lines = info.outline!.split('\n');
 
@@ -148,8 +177,7 @@ describe('collectDocumentInfoInPage（元素大纲，jsdom 真实 DOM）', () =>
     setDocumentHtml('<body><p>你好 <b>世界</b>！</p><div>   </div><h1>多行\n\t标题</h1></body>');
     const info = collectDocumentInfoInPage({
       outline: true,
-      rawHtml: false,
-      includeNonTextElements: false,
+      minText: false,
     });
     const lines = info.outline!.split('\n');
 
@@ -167,8 +195,7 @@ describe('collectDocumentInfoInPage（元素大纲，jsdom 真实 DOM）', () =>
     setDocumentHtml(`<body><p>${'字'.repeat(100)}</p></body>`);
     const info = collectDocumentInfoInPage({
       outline: true,
-      rawHtml: false,
-      includeNonTextElements: false,
+      minText: false,
     });
 
     expect(info.outline).toContain(`2 p ${'字'.repeat(80)}…`);
@@ -181,8 +208,7 @@ describe('collectDocumentInfoInPage（元素大纲，jsdom 真实 DOM）', () =>
     );
     const info = collectDocumentInfoInPage({
       outline: true,
-      rawHtml: false,
-      includeNonTextElements: false,
+      minText: false,
     });
     const lines = info.outline!.split('\n');
 
@@ -195,7 +221,7 @@ describe('collectDocumentInfoInPage（元素大纲，jsdom 真实 DOM）', () =>
     expect(lines.filter((line) => line === '2 p').length).toBe(20);
   });
 
-  it('默认静默排除非文本子树（svg/script/style/iframe），不输出任何元信息行', () => {
+  it('永久静默排除非文本子树（svg/script/style/iframe，无保留开关），不输出任何元信息行', () => {
     setDocumentHtml(
       '<head><style>.a{color:red}</style></head>' +
         '<body><main><svg><g><path d="M0 0"/></g></svg><p>正文</p></main>' +
@@ -203,8 +229,7 @@ describe('collectDocumentInfoInPage（元素大纲，jsdom 真实 DOM）', () =>
     );
     const info = collectDocumentInfoInPage({
       outline: true,
-      rawHtml: false,
-      includeNonTextElements: false,
+      minText: false,
     });
     const lines = info.outline!.split('\n');
 
@@ -222,29 +247,13 @@ describe('collectDocumentInfoInPage（元素大纲，jsdom 真实 DOM）', () =>
     expect(lines.at(-1)).toBe('3 p 正文');
   });
 
-  it('includeNonTextElements=true 时保留非文本子树且不输出跳过汇总', () => {
-    setDocumentHtml('<body><svg><g><path d="M0 0"/></g></svg><script>evil()</script></body>');
-    const info = collectDocumentInfoInPage({
-      outline: true,
-      rawHtml: false,
-      includeNonTextElements: true,
-    });
-    const lines = info.outline!.split('\n');
-
-    expect(lines).toContain('2 svg');
-    expect(lines).toContain('3 g');
-    expect(lines).toContain('4 path');
-    expect(lines.some((line) => line.includes('已跳过'))).toBe(false);
-  });
-
   it('只保留结构与 id/class：不含 href/src/事件属性等取值', () => {
     setDocumentHtml(
       '<body><a class="link" href="https://x.com/?token=secret" onclick="evil()">去</a></body>'
     );
     const info = collectDocumentInfoInPage({
       outline: true,
-      rawHtml: false,
-      includeNonTextElements: false,
+      minText: false,
     });
 
     expect(info.outline).toContain('2 a.link');
@@ -253,23 +262,22 @@ describe('collectDocumentInfoInPage（元素大纲，jsdom 真实 DOM）', () =>
     expect(info.outline).not.toContain('onclick');
   });
 
-  it('rawHtml 仅在开关开启时采集；节点上限触发时追加截断说明', () => {
-    setDocumentHtml(`<body><div id="root">${'<span></span>'.repeat(1300)}</div></body>`);
-    const withRaw = collectDocumentInfoInPage({
+  it('minText 仅在开关开启时采集；元素上限触发时追加说明行', () => {
+    setDocumentHtml(`<body><div id="root">${'<span>字</span>'.repeat(1300)}</div></body>`);
+    const withMin = collectDocumentInfoInPage({
       outline: true,
-      rawHtml: true,
-      includeNonTextElements: false,
+      minText: true,
     });
-    expect(withRaw.rawHtml).toContain('<html');
-    expect(withRaw.outline).toContain('已达节点上限');
+    expect(withMin.minText).toContain('…(已达节点上限 1200 行，其余未展开)');
+    expect(withMin.minText).toContain('3 span 字');
+    expect(withMin.outline).toContain('已达节点上限');
 
-    const withoutRaw = collectDocumentInfoInPage({
+    const withoutMin = collectDocumentInfoInPage({
       outline: false,
-      rawHtml: false,
-      includeNonTextElements: false,
+      minText: false,
     });
-    expect(withoutRaw.outline).toBeUndefined();
-    expect(withoutRaw.rawHtml).toBeUndefined();
+    expect(withoutMin.outline).toBeUndefined();
+    expect(withoutMin.minText).toBeUndefined();
   });
 });
 
@@ -302,7 +310,7 @@ describe('executeBuiltinTool', () => {
     expect(toBuiltinToolResult(undefined).content[0]?.text).toBe('null');
   });
 
-  it('三开关缺省：不采集 outline/rawHtml，结果不含 outline/text（防上下文污染）', async () => {
+  it('两开关缺省：不采集 outline/minText，结果不含 outline/minText（防上下文污染）', async () => {
     const collectFromTab = vi.fn(async () => makeRaw());
     const result = unwrap<Array<Record<string, unknown>>>(
       await executeBuiltinTool(GET_DOCUMENT_INFO_TOOL_NAME, {}, { getSelectedTabIds: () => [7], collectFromTab })
@@ -311,20 +319,19 @@ describe('executeBuiltinTool', () => {
     // 采集开关原样透传（默认全 false，页面侧不做任何额外加工）
     expect(collectFromTab).toHaveBeenCalledWith(7, {
       outline: false,
-      rawHtml: false,
-      includeNonTextElements: false,
+      minText: false,
     });
     expect(result).toHaveLength(1);
     expect(result[0]).toMatchObject({ tabId: 7, url: 'https://a.com/' });
     expect('outline' in result[0]!).toBe(false);
-    expect('text' in result[0]!).toBe(false);
+    expect('minText' in result[0]!).toBe(false);
   });
 
-  it('includeOutline：只取页面内生成的大纲，不请求 rawHtml', async () => {
+  it('includeOutline：只取页面内生成的大纲，不请求 minText', async () => {
     const collectFromTab = vi.fn(async (_tabId: number, options: DocumentCollectOptions) =>
       makeRaw({ ...(options.outline ? { outline: '0 html\n1 body\n2 p' } : {}) })
     );
-    const result = unwrap<Array<{ outline?: string; text?: string }>>(
+    const result = unwrap<Array<{ outline?: string; minText?: string }>>(
       await executeBuiltinTool(GET_DOCUMENT_INFO_TOOL_NAME, { includeOutline: true }, {
         getSelectedTabIds: () => [7],
         collectFromTab,
@@ -333,21 +340,20 @@ describe('executeBuiltinTool', () => {
 
     expect(collectFromTab).toHaveBeenCalledWith(7, {
       outline: true,
-      rawHtml: false,
-      includeNonTextElements: false,
+      minText: false,
     });
     expect(result[0]?.outline).toBe('0 html\n1 body\n2 p');
-    expect('text' in result[0]!).toBe(false);
+    expect('minText' in result[0]!).toBe(false);
   });
 
-  it('includeText：采集 rawHtml 并携带压缩纯文本（丢弃 script 内容），不含 outline', async () => {
+  it('includeMinText：复用页面内大纲采集，携带最小化文本大纲，不含 outline', async () => {
     const collectFromTab = vi.fn(async (_tabId: number, options: DocumentCollectOptions) =>
       makeRaw({
-        ...(options.rawHtml ? { rawHtml: '<p>你好\n  <b>世界</b></p><script>x</script>' } : {}),
+        ...(options.minText ? { minText: '2 div 使用即代表您同意我们的' } : {}),
       })
     );
-    const result = unwrap<Array<{ text?: string; outline?: string }>>(
-      await executeBuiltinTool(GET_DOCUMENT_INFO_TOOL_NAME, { includeText: true }, {
+    const result = unwrap<Array<{ minText?: string; outline?: string }>>(
+      await executeBuiltinTool(GET_DOCUMENT_INFO_TOOL_NAME, { includeMinText: true }, {
         getSelectedTabIds: () => [7],
         collectFromTab,
       })
@@ -355,27 +361,25 @@ describe('executeBuiltinTool', () => {
 
     expect(collectFromTab).toHaveBeenCalledWith(7, {
       outline: false,
-      rawHtml: true,
-      includeNonTextElements: false,
+      minText: true,
     });
-    expect(result[0]?.text).toContain('你好');
-    expect(result[0]?.text).not.toContain('x');
+    expect(result[0]?.minText).toContain('2 div 使用即代表您同意我们的');
+    expect(result[0]?.minText).not.toContain('id=');
     expect('outline' in result[0]!).toBe(false);
   });
 
-  it('includeNonTextElements 透传到页面侧（大纲与文本同一开关语义）', async () => {
-    const collectFromTab = vi.fn(async () => makeRaw());
-    await executeBuiltinTool(
-      GET_DOCUMENT_INFO_TOOL_NAME,
-      { includeOutline: true, includeNonTextElements: true },
-      { getSelectedTabIds: () => [7], collectFromTab }
+  it('minText 超长时按字符上限兜底截断并标注省略长度', async () => {
+    const longMinText = 'x'.repeat(DOC_MIN_TEXT_MAX_CHARS + 50);
+    const collectFromTab = vi.fn(async () => makeRaw({ minText: longMinText }));
+    const result = unwrap<Array<{ minText?: string }>>(
+      await executeBuiltinTool(GET_DOCUMENT_INFO_TOOL_NAME, { includeMinText: true }, {
+        getSelectedTabIds: () => [7],
+        collectFromTab,
+      })
     );
 
-    expect(collectFromTab).toHaveBeenCalledWith(7, {
-      outline: true,
-      rawHtml: false,
-      includeNonTextElements: true,
-    });
+    expect(result[0]?.minText?.length).toBeLessThanOrEqual(DOC_MIN_TEXT_MAX_CHARS + 15);
+    expect(result[0]?.minText).toContain('…(+');
   });
 
   it('大纲仅在 includeOutline 时写入，且按字符上限兜底截断', async () => {
