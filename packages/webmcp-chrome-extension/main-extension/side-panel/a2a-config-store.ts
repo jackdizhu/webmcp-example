@@ -105,11 +105,19 @@ export async function saveA2aConfig(
   await storage.set({ [A2A_CONFIG_STORAGE_KEY]: snapshot });
 }
 
-/** refs → 待持久化快照（纯浅拷贝逐字段列出，与 toPanelSettings 对称；保存链路收口用）。 */
+/** refs → 待持久化快照（逐字段显式列出；2026-09-16 协议扩展：新增 protocol 与 dify 专属字段，
+ *  白名单缺失字段会被保存链路静默丢弃，新增 AgentA2aRef 字段时必须同步扩展本函数）。 */
 export function toA2aConfigSnapshot(refs: AgentA2aRef[]): AgentA2aRef[] {
-  return refs.map((item) =>
-    item.endpointOverride !== undefined
-      ? { id: item.id, cardUrl: item.cardUrl, enabled: item.enabled, endpointOverride: item.endpointOverride }
-      : { id: item.id, cardUrl: item.cardUrl, enabled: item.enabled }
-  );
+  return refs.map((item) => {
+    const out: AgentA2aRef = { id: item.id, enabled: item.enabled };
+    if (item.cardUrl !== undefined) out.cardUrl = item.cardUrl;
+    if (item.protocol !== undefined) out.protocol = item.protocol;
+    if (item.endpointOverride !== undefined) out.endpointOverride = item.endpointOverride;
+    if (item.endpoint !== undefined) out.endpoint = item.endpoint;
+    if (item.responseMode !== undefined) out.responseMode = item.responseMode;
+    if (item.displayName !== undefined) out.displayName = item.displayName;
+    if (item.description !== undefined) out.description = item.description;
+    if (item.inputs !== undefined) out.inputs = item.inputs;
+    return out;
+  });
 }

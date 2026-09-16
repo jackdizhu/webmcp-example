@@ -1,5 +1,5 @@
 // a2a-tool-source 单测：工具名与校验 / 卡片预取 / 结果分型 / input-required 续传 /
-// 兜底轮询 / 串行守卫（2026-09-12 决策 1/2/5）。
+// 兜底轮询 / 串行守卫（2026-09-12 决策 1/2/5）+ Dify 协议分派（2026-09-16 扩展）。
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   A2A_POLL_MAX_ATTEMPTS,
@@ -7,10 +7,12 @@ import {
   buildA2aToolName,
   createA2aToolSource,
   parseA2aToolName,
+  parseA2aToolProtocol,
   validateA2aAgentId,
   type A2aAgentConfig,
 } from './a2a-tool-source';
 import { A2aClientError, type A2aClient, type A2aSendResult } from './a2a-client';
+import type { DifyChatInput, DifyChatResult, DifyClient } from './dify-client';
 import type { A2aTask, AgentCard } from './a2a-types';
 
 const card = (overrides: Partial<AgentCard> = {}): AgentCard => ({
@@ -375,5 +377,152 @@ describe('串行守卫（决策 5）', () => {
     expect(other.isError).toBe(false);
     pending.resolve({ task: { id: 't1', status: { state: 'completed' } } });
     await first;
+  });
+});
+
+// ---- Dify 协议分派（2026-09-16 协议配置扩展）----
+
+/** DifyClient 桩（默认：返回 answer + conversationId）。 */
+function difyStub(overrides: Partial<DifyClient> = {}): DifyClient {
+  const base: DifyClient = {
+    chat: vi.fn(async (_input: DifyChatInput): Promise<DifyChatResult> => ({
+      answer: '北京今天晴',
+      conversationId: 'abc-123',
+    })),
+    ...overrides,
+  };
+  return base;
+}
+
+const difyConfig = (overrides: Partial<A2aAgentConfig> = {}): A2aAgentConfig => ({
+  id: 'weather',
+  protocol: 'dify',
+  endpoint: 'https://api.dify.example.com/v1/chat-messages',
+  token: 'app-key',
+  ...overrides,
+});
+
+describe('Dify 工具名与协议前缀', () => {
+  it('dify 前缀 a2a_dify__ 独立命名空间，且不被 a2a__ 误匹配', () => {
+    expect(buildA2aToolName('weather', 'dify')).toBe('a2a_dify__weather__send_task');
+    expect(buildA2aToolName('weather', 'jsonrpc')).toBe('a2a__weather__send_task');
+    expect(parseA2aToolName('a2a_dify__weather__send_task')).toBe('weather');
+    expect(parseA2aToolProtocol('a2a_dify__weather__send_task')).toBe('dify');
+    expect(parseA2aToolProtocol('a2a__weather__send_task')).toBe('jsonrpc');
+    expect(parseA2aToolProtocol('a2a_dify__weather__other')).toBeNull();
+    expect(parseA2aToolName('a2a_dify____send_task')).toBeNull();
+  });
+});
+
+describe('Dify setAgents / listTools', () => {
+  it('dify 条目跳过卡片抓取，静态构建工具（displayName/description 数据源）', async () => {
+    const client = clientStub();
+    const source = createA2aToolSource({ client, difyClient: difyStub() });
+    const failures = await source.setAgents([
+      difyConfig({ displayName: '天气助手', description: '查询城市天气' }),
+    ]);
+    expect(failures).toEqual([]);
+    expect(client.fetchAgentCard).not.toHaveBeenCalled();
+    const tools = source.listTools();
+    expect(tools).toHaveLength(1);
+    expect(tools[0]!.name).toBe('a2a_dify__weather__send_task');
+    expect(tools[0]!.description).toContain('天气助手');
+    expect(tools[0]!.description).toContain('查询城市天气');
+    expect(tools[0]!.description).toContain('conversationId');
+  });
+
+  it('displayName/description 缺省时用 id 与占位文案', async () => {
+    const source = createA2aToolSource({ client: clientStub(), difyClient: difyStub() });
+    await source.setAgents([difyConfig()]);
+    const tool = source.listTools()[0]!;
+    expect(tool.description).toContain('weather');
+  });
+
+  it('jsonrpc 与 dify 条目可混合配置', async () => {
+    const source = createA2aToolSource({ client: clientStub(), difyClient: difyStub() });
+    await source.setAgents([config(), difyConfig()]);
+    const names = source.listTools().map((tool) => tool.name);
+    expect(names).toEqual(['a2a__doc__send_task', 'a2a_dify__weather__send_task']);
+  });
+});
+
+describe('Dify callTool 分派', () => {
+  it('委派走 dify.chat，入参按配置组装（endpoint/user/inputs/responseMode）', async () => {
+    const dify = difyStub();
+    const source = createA2aToolSource({ client: clientStub(), difyClient: dify });
+    await source.setAgents([
+      difyConfig({ user: 'install-uuid', inputs: { city: '北京' }, responseMode: 'blocking' }),
+    ]);
+    const result = await source.callTool('a2a_dify__weather__send_task', { message: '帮我查北京天气' });
+    expect(result.isError).toBe(false);
+    expect(dify.chat).toHaveBeenCalledTimes(1);
+    const input = (dify.chat as ReturnType<typeof vi.fn>).mock.calls[0]![0] as DifyChatInput;
+    expect(input.endpoint).toBe('https://api.dify.example.com/v1/chat-messages');
+    expect(input.query).toBe('帮我查北京天气');
+    expect(input.user).toBe('install-uuid');
+    expect(input.responseMode).toBe('blocking');
+    expect(input.inputs).toEqual({ city: '北京' });
+    expect(input.conversationId).toBeUndefined();
+    const options = (dify.chat as ReturnType<typeof vi.fn>).mock.calls[0]![1] as { token?: string };
+    expect(options.token).toBe('app-key');
+  });
+
+  it('结果附 conversationId 续传提示；携 taskId 时透传为 conversationId', async () => {
+    const dify = difyStub();
+    const source = createA2aToolSource({ client: clientStub(), difyClient: dify });
+    await source.setAgents([difyConfig()]);
+    const result = await source.callTool('a2a_dify__weather__send_task', {
+      message: '那上海呢',
+      taskId: 'abc-123',
+    });
+    const input = (dify.chat as ReturnType<typeof vi.fn>).mock.calls[0]![0] as DifyChatInput;
+    expect(input.conversationId).toBe('abc-123');
+    expect(result.content[0]!.text).toContain('北京今天晴');
+    expect(result.content[0]!.text).toContain('conversationId: abc-123');
+  });
+
+  it('config.user 缺省时回落客户端兜底常量', async () => {
+    const dify = difyStub();
+    const source = createA2aToolSource({ client: clientStub(), difyClient: dify });
+    // difyConfig 基线不含 user 字段（exactOptionalPropertyTypes：缺失 = 未配置）
+    await source.setAgents([difyConfig()]);
+    await source.callTool('a2a_dify__weather__send_task', { message: 'hi' });
+    const input = (dify.chat as ReturnType<typeof vi.fn>).mock.calls[0]![0] as DifyChatInput;
+    expect(input.user.length).toBeGreaterThan(0);
+  });
+
+  it('dify 调用抛 A2aClientError → isError 分型文本', async () => {
+    const dify = difyStub({
+      chat: vi.fn(async () => {
+        throw new A2aClientError('http', 'Dify 接口返回 HTTP 401（chat-messages）');
+      }),
+    });
+    const source = createA2aToolSource({ client: clientStub(), difyClient: dify });
+    await source.setAgents([difyConfig()]);
+    const result = await source.callTool('a2a_dify__weather__send_task', { message: 'hi' });
+    expect(result.isError).toBe(true);
+    expect(result.content[0]!.text).toContain('http');
+    expect(result.content[0]!.text).toContain('401');
+  });
+
+  it('前缀错配（jsonrpc 条目配 a2a_dify__ 工具名）→ isError 提示重存配置', async () => {
+    const source = createA2aToolSource({ client: clientStub(), difyClient: difyStub() });
+    await source.setAgents([config()]);
+    const result = await source.callTool('a2a_dify__doc__send_task', { message: 'x' });
+    expect(result.isError).toBe(true);
+    expect(result.content[0]!.text).toContain('协议前缀');
+  });
+
+  it('串行守卫跨协议共用（同 id 进行中时 dify 工具同样被拒）', async () => {
+    const pending = deferred<DifyChatResult>();
+    const dify = difyStub({ chat: vi.fn(async () => pending.promise) });
+    const source = createA2aToolSource({ client: clientStub(), difyClient: dify });
+    await source.setAgents([difyConfig()]);
+    const first = source.callTool('a2a_dify__weather__send_task', { message: '第一个' });
+    const second = await source.callTool('a2a_dify__weather__send_task', { message: '第二个' });
+    expect(second.isError).toBe(true);
+    expect(second.content[0]!.text).toContain('串行');
+    pending.resolve({ answer: '完成', conversationId: 'c-1' });
+    expect((await first).isError).toBe(false);
   });
 });

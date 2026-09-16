@@ -103,9 +103,40 @@ describe('saveA2aConfig', () => {
 });
 
 describe('toA2aConfigSnapshot', () => {
-  it('逐字段快照：无端点覆盖时移除可选字段（exactOptionalPropertyTypes 语义）', () => {
+  it('逐字段快照：无端点覆盖时移除可选字段（exactOptionalPropertyTypes 语义；键序无关）', () => {
     expect(toA2aConfigSnapshot(refs)).toEqual(refs);
-    expect(Object.keys(toA2aConfigSnapshot(refs)[0]!)).toEqual(['id', 'cardUrl', 'enabled']);
-    expect(Object.keys(toA2aConfigSnapshot(refs)[1]!)).toEqual(['id', 'cardUrl', 'enabled', 'endpointOverride']);
+    expect(Object.keys(toA2aConfigSnapshot(refs)[0]!).sort()).toEqual(['id', 'cardUrl', 'enabled'].sort());
+    expect(Object.keys(toA2aConfigSnapshot(refs)[1]!).sort()).toEqual(
+      ['id', 'cardUrl', 'enabled', 'endpointOverride'].sort()
+    );
+  });
+
+  it('dify 条目：协议与 dify 专属字段全部保留（白名单遗漏会静默丢字段）', () => {
+    const difyRefs: AgentA2aRef[] = [
+      {
+        id: 'weather',
+        enabled: true,
+        protocol: 'dify',
+        endpoint: 'https://api.dify.example.com/v1/chat-messages',
+        responseMode: 'blocking',
+        displayName: '天气助手',
+        description: '查询城市天气',
+        inputs: { city: '北京' },
+      },
+      { id: 'minimal', enabled: false, protocol: 'dify', endpoint: 'https://x/v1/chat-messages' },
+    ];
+    expect(toA2aConfigSnapshot(difyRefs)).toEqual(difyRefs);
+    expect(Object.keys(toA2aConfigSnapshot(difyRefs)[0]!).sort()).toEqual(
+      ['id', 'enabled', 'protocol', 'endpoint', 'responseMode', 'displayName', 'description', 'inputs'].sort()
+    );
+    expect(Object.keys(toA2aConfigSnapshot(difyRefs)[1]!).sort()).toEqual(
+      ['id', 'enabled', 'protocol', 'endpoint'].sort()
+    );
+  });
+
+  it('jsonrpc 条目显式 protocol 保留；旧数据（无 protocol）快照不带该字段', () => {
+    const withProtocol: AgentA2aRef[] = [{ id: 'a', cardUrl: 'https://x/card.json', enabled: true, protocol: 'jsonrpc' }];
+    expect(toA2aConfigSnapshot(withProtocol)).toEqual(withProtocol);
+    expect(toA2aConfigSnapshot(refs)[0]).not.toHaveProperty('protocol');
   });
 });

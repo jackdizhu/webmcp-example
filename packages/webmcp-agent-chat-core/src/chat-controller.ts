@@ -13,6 +13,7 @@ import {
   trimHistory,
   type AgentLoopEvent,
   type AgentLoopOptions,
+  type AgentLoopResult,
   type AgentTool,
   type ChatMessage,
   type LlmChatClient,
@@ -81,6 +82,51 @@ export function createChatController(deps: ChatControllerDeps): ChatController {
   let busy = false;
   let abortController: AbortController | null = null;
 
+  /** 执行一轮循环：刷新工具清单 → 构建 LLM 客户端 → 裁剪历史 → 跑 agent 循环。 */
+  const executeTurn = async (
+    config: LlmConfig,
+    userText: string,
+    signal: AbortSignal,
+    view: ChatTurnView
+  ): Promise<AgentLoopResult> => {
+    // 每轮发送前刷新工具清单，保证页面工具变化（listChanged）能被感知
+    const tools: AgentTool[] = await deps.getTools();
+    const llm = deps.createLlm
+      ? deps.createLlm(config)
+      : createLlmClient(config, fetch, onLog);
+    // 历史裁剪：保留最近 maxHistoryTurns 轮（0 = 不裁剪），随 transcript 收敛逐轮有界
+    const boundedHistory = trimHistory(history, deps.getMaxHistoryTurns());
+    const loopOptions: AgentLoopOptions = {
+      onEvent: (event) => view.onEvent(event),
+      signal,
+    };
+    // 空串归一化：agent-loop 的 ?? 回退仅对 undefined/null 生效
+    const trimmedPrompt = deps.getSystemPrompt().trim();
+    if (trimmedPrompt) loopOptions.systemPrompt = trimmedPrompt;
+    return runAgentLoop({
+      // 历史以本轮用户消息结尾（agent-loop 约定）
+      history: [...boundedHistory, { role: 'user' as const, content: userText }],
+      tools,
+      deps: {
+        llm,
+        executeTool: (name, args) => deps.callTool(name, args),
+      },
+      options: loopOptions,
+    });
+  };
+
+  /** 本轮异常分型：用户终止 → 终止文案；其余 → 错误文案（均落日志）。 */
+  const settleTurnError = (error: unknown, signal: AbortSignal, view: ChatTurnView): void => {
+    if (error instanceof AgentAbortError || signal.aborted) {
+      view.setText(ABORTED_TURN_TEXT);
+      onLog('info', 'turn_aborted');
+      return;
+    }
+    const message = error instanceof Error ? error.message : String(error);
+    view.setText(`出错了：${message}`);
+    onLog('error', 'turn_error', message);
+  };
+
   return {
     isBusy: () => busy,
 
@@ -121,42 +167,12 @@ export function createChatController(deps: ChatControllerDeps): ChatController {
       const signal = abortController.signal;
 
       try {
-        // 每轮发送前刷新工具清单，保证页面工具变化（listChanged）能被感知
-        const tools: AgentTool[] = await deps.getTools();
-        const llm = deps.createLlm
-          ? deps.createLlm(config)
-          : createLlmClient(config, fetch, onLog);
-        // 历史裁剪：保留最近 maxHistoryTurns 轮（0 = 不裁剪），随 transcript 收敛逐轮有界
-        const boundedHistory = trimHistory(history, deps.getMaxHistoryTurns());
-        const loopOptions: AgentLoopOptions = {
-          onEvent: (event) => view.onEvent(event),
-          signal,
-        };
-        // 空串归一化：agent-loop 的 ?? 回退仅对 undefined/null 生效
-        const trimmedPrompt = deps.getSystemPrompt().trim();
-        if (trimmedPrompt) loopOptions.systemPrompt = trimmedPrompt;
-        const result = await runAgentLoop(
-          // 历史以本轮用户消息结尾（agent-loop 约定）
-          [...boundedHistory, { role: 'user' as const, content: userText }],
-          tools,
-          {
-            llm,
-            executeTool: (name, args) => deps.callTool(name, args),
-          },
-          loopOptions
-        );
+        const result = await executeTurn(config, userText, signal, view);
         view.setText(result.text);
         history = result.transcript;
         onLog('info', 'turn_end', result.text);
       } catch (error) {
-        if (error instanceof AgentAbortError || signal.aborted) {
-          view.setText(ABORTED_TURN_TEXT);
-          onLog('info', 'turn_aborted');
-        } else {
-          const message = error instanceof Error ? error.message : String(error);
-          view.setText(`出错了：${message}`);
-          onLog('error', 'turn_error', message);
-        }
+        settleTurnError(error, signal, view);
       } finally {
         deps.onTurnSettled?.();
         busy = false;

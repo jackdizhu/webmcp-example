@@ -31,9 +31,9 @@ export const A2aAgentsSection = defineComponent({
     saving: { type: Boolean, required: true },
     /** 草稿是否偏离基线（保存按钮可用态）。 */
     dirty: { type: Boolean, required: true },
-    /** 连通测试（App 委托 a2a-host.testConnection），返回结果文案。 */
+    /** 连通测试（App 委托 a2a-host.testConnection，按协议分派，返回结果文案）。 */
     testConnection: {
-      type: Function as PropType<(cardUrl: string, token?: string) => Promise<string>>,
+      type: Function as PropType<(refItem: AgentA2aRef, token?: string) => Promise<string>>,
       required: true,
     },
     /** App 层全局提示（持久化失败等；null = 无提示）。 */
@@ -67,13 +67,23 @@ export const A2aAgentsSection = defineComponent({
       editingId.value = '';
     };
 
-    // ---- 表单子页面提交（新增/编辑统一 upsert；归一化端点覆盖后交宿主落草稿）----
+    // ---- 表单子页面提交（新增/编辑统一 upsert；按协议归一化后交宿主落草稿）----
 
     const handleFormSubmit = (payload: A2aFormPayload): void => {
-      // 归一化端点覆盖（空串 = 字段移除语义，回落卡片接口地址）
-      const trimmed = payload.endpointOverride.trim();
-      const base = { id: payload.id, cardUrl: payload.cardUrl, enabled: payload.enabled };
-      const refItem: AgentA2aRef = trimmed.length > 0 ? { ...base, endpointOverride: trimmed } : base;
+      const base = { id: payload.id, enabled: payload.enabled };
+      let refItem: AgentA2aRef;
+      if (payload.protocol === 'dify') {
+        // dify 条目：endpoint 必填，可选字段空串 = 未填写（字段移除语义）
+        refItem = { ...base, protocol: 'dify', endpoint: payload.endpoint, responseMode: payload.responseMode };
+        if (payload.displayName.length > 0) refItem.displayName = payload.displayName;
+        if (payload.description.length > 0) refItem.description = payload.description;
+        if (payload.inputsJson.length > 0) refItem.inputs = JSON.parse(payload.inputsJson) as Record<string, unknown>;
+      } else {
+        // jsonrpc 条目（现状语义）：cardUrl 必填，端点覆盖空串 = 未覆盖（回落卡片接口地址）
+        refItem = { ...base, cardUrl: payload.cardUrl };
+        const trimmed = payload.endpointOverride.trim();
+        if (trimmed.length > 0) refItem.endpointOverride = trimmed;
+      }
       emit('commitRef', refItem, payload.token);
       backToList();
     };

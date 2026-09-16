@@ -44,7 +44,7 @@ describe('runAgentLoop', () => {
       { role: 'user', content: '检查一下页面' }
     );
 
-    const result = await runAgentLoop(history, tools, { llm, executeTool });
+    const result = await runAgentLoop({ history, tools, deps: { llm, executeTool } });
 
     expect(result.text).toBe('页面一切正常');
     expect(executeTool).not.toHaveBeenCalled();
@@ -65,11 +65,13 @@ describe('runAgentLoop', () => {
     const executeTool = vi.fn(async () => ({ ok: true }));
     const events: AgentLoopEvent[] = [];
 
-    const result = await runAgentLoop(historyOf({ role: 'user', content: '调用 get_status' }), tools, {
-      llm,
-      executeTool,
-    }, {
-      onEvent: (event) => events.push(event),
+    const result = await runAgentLoop({
+      history: historyOf({ role: 'user', content: '调用 get_status' }),
+      tools,
+      deps: { llm, executeTool },
+      options: {
+        onEvent: (event) => events.push(event),
+      },
     });
 
     expect(executeTool).toHaveBeenCalledWith('get_status', { verbose: true });
@@ -88,9 +90,10 @@ describe('runAgentLoop', () => {
     ]);
     const executeTool = vi.fn();
 
-    const result = await runAgentLoop(historyOf({ role: 'user', content: '调用工具' }), tools, {
-      llm,
-      executeTool,
+    const result = await runAgentLoop({
+      history: historyOf({ role: 'user', content: '调用工具' }),
+      tools,
+      deps: { llm, executeTool },
     });
 
     expect(executeTool).not.toHaveBeenCalled();
@@ -107,9 +110,10 @@ describe('runAgentLoop', () => {
       throw new Error('工具不存在');
     });
 
-    const result = await runAgentLoop(historyOf({ role: 'user', content: '调用工具' }), tools, {
-      llm,
-      executeTool,
+    const result = await runAgentLoop({
+      history: historyOf({ role: 'user', content: '调用工具' }),
+      tools,
+      deps: { llm, executeTool },
     });
 
     const toolMessage = result.transcript.find((m) => m.role === 'tool');
@@ -122,10 +126,12 @@ describe('runAgentLoop', () => {
     ]);
     const executeTool = vi.fn(async () => ({ ok: true }));
 
-    const result = await runAgentLoop(historyOf({ role: 'user', content: '循环调用' }), tools, {
-      llm,
-      executeTool,
-    }, { maxIterations: 1 });
+    const result = await runAgentLoop({
+      history: historyOf({ role: 'user', content: '循环调用' }),
+      tools,
+      deps: { llm, executeTool },
+      options: { maxIterations: 1 },
+    });
 
     expect(result.text).toContain('迭代上限');
   });
@@ -137,8 +143,11 @@ describe('runAgentLoop', () => {
     controller.abort();
 
     await expect(
-      runAgentLoop(historyOf({ role: 'user', content: '被终止' }), tools, { llm, executeTool }, {
-        signal: controller.signal,
+      runAgentLoop({
+        history: historyOf({ role: 'user', content: '被终止' }),
+        tools,
+        deps: { llm, executeTool },
+        options: { signal: controller.signal },
       })
     ).rejects.toThrow(AgentAbortError);
     expect(llm.calls).toHaveLength(0);
@@ -158,8 +167,11 @@ describe('runAgentLoop', () => {
     const controller = new AbortController();
 
     await expect(
-      runAgentLoop(historyOf({ role: 'user', content: '执行一半被终止' }), tools, { llm, executeTool }, {
-        signal: controller.signal,
+      runAgentLoop({
+        history: historyOf({ role: 'user', content: '执行一半被终止' }),
+        tools,
+        deps: { llm, executeTool },
+        options: { signal: controller.signal },
       })
     ).rejects.toThrow(AgentAbortError);
     // 工具调用完成了，但不再发起第二次 LLM 请求
@@ -177,8 +189,11 @@ describe('runAgentLoop', () => {
     };
     const controller = new AbortController();
 
-    const result = await runAgentLoop(historyOf({ role: 'user', content: 'hi' }), tools, { llm, executeTool: vi.fn() }, {
-      signal: controller.signal,
+    const result = await runAgentLoop({
+      history: historyOf({ role: 'user', content: 'hi' }),
+      tools,
+      deps: { llm, executeTool: vi.fn() },
+      options: { signal: controller.signal },
     });
 
     expect(result.text).toBe('done');

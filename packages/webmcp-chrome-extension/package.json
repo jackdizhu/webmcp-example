@@ -46,6 +46,7 @@
     "@mcp-b/webmcp-types": "catalog:",
     "@types/node": "catalog:",
     "@types/sanitize-html": "catalog:",
+    "@vitejs/plugin-vue": "^6.0.9",
     "eslint": "catalog:",
     "jsdom": "^25.0.0",
     "playwright": "catalog:",
