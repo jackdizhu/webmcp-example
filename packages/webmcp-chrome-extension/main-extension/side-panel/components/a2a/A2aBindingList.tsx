@@ -8,8 +8,9 @@
 // - A5 测试结果分级 .a2a-test-result-ok/-err（左缘状态条 + 色字）
 // - A6 空态 .page-empty + 内嵌「新增绑定」CTA
 // 本组件零 chrome.*，数据经 props/emits（分层约定：独立组件不感知页面路由）。
-// 模板用 h() 渲染函数（MV3 扩展页 CSP 禁止运行时字符串编译，见 issues/001）。
-import { defineComponent, h, onUnmounted, ref, type PropType, type VNode } from 'vue';
+// 模板用 TSX：构建期经 oxc 转译为 vue/jsx-runtime 函数调用，运行时零 eval，
+// 与 MV3 扩展页 CSP 兼容（见 issues/001）。
+import { defineComponent, onUnmounted, ref, type PropType, type VNode } from 'vue';
 import type { AgentA2aRef } from 'webmcp-agent-chat-core';
 import { t } from '../../i18n';
 
@@ -100,15 +101,19 @@ export const A2aBindingList = defineComponent({
     };
 
     /** 元信息行（只读）：标签 + 值（title 可选：长值悬停看全量，A4）。 */
-    const metaRow = (label: string, value: VNode | string, title?: string): VNode =>
-      h('div', { class: 'a2a-item-meta' }, [
-        h('span', { class: 'a2a-item-meta-label' }, label),
-        h('span', { class: 'a2a-item-meta-value', title }, value),
-      ]);
+    const metaRow = (label: string, value: VNode | string, title?: string): VNode => (
+      <div class="a2a-item-meta">
+        <span class="a2a-item-meta-label">{label}</span>
+        <span class="a2a-item-meta-value" title={title}>
+          {value}
+        </span>
+      </div>
+    );
 
     /** A4 徽章：未覆盖/Token 状态等非长文本值（muted = 中性灰 / ok = 已配置绿）。 */
-    const metaBadge = (text: string, tone: 'ok' | 'muted'): VNode =>
-      h('span', { class: `a2a-meta-badge a2a-meta-badge-${tone}` }, text);
+    const metaBadge = (text: string, tone: 'ok' | 'muted'): VNode => (
+      <span class={`a2a-meta-badge a2a-meta-badge-${tone}`}>{text}</span>
+    );
 
     return () => {
       const rows: VNode[] = (props.refs ?? []).map((refItem) => {
@@ -116,64 +121,76 @@ export const A2aBindingList = defineComponent({
         const armed = confirmRemoveId.value === refItem.id;
         const result = testResults.value[refItem.id];
         const isDify = refItem.protocol === 'dify';
-        return h('div', { class: ['a2a-item', refItem.enabled ? '' : 'a2a-item-off'], key: refItem.id }, [
-          // A2 卡片头只留 id + 状态徽章（操作独立成行）
-          h('div', { class: 'a2a-item-head' }, [
-            h('span', { class: 'a2a-item-id', title: refItem.id }, refItem.id),
-            h('span', { class: 'a2a-item-state' }, refItem.enabled ? t('a2a.enabled') : t('a2a.disabled')),
-          ]),
-          // 协议徽标（2026-09-16 协议配置扩展）
-          metaRow(t('a2a.protocol.label'), metaBadge(isDify ? t('a2a.protocol.dify') : t('a2a.protocol.jsonrpc'), 'muted')),
-          isDify
-            ? metaRow(t('a2a.form.endpoint'), refItem.endpoint ?? '', refItem.endpoint)
-            : metaRow(t('a2a.cardUrl'), refItem.cardUrl ?? '', refItem.cardUrl),
-          !isDify
-            ? metaRow(
-                t('a2a.endpointOverride'),
-                refItem.endpointOverride !== undefined
-                  ? refItem.endpointOverride
-                  : metaBadge(t('a2a.noOverride'), 'muted'),
-                refItem.endpointOverride
-              )
-            : null,
-          metaRow(
-            'Token',
-            metaBadge(tokenSet ? t('a2a.tokenSet') : t('a2a.tokenUnset'), tokenSet ? 'ok' : 'muted')
-          ),
-          // A2 操作区独立成行：测试连通 / 编辑 / 删除（A3 删除红描边 + 两步确认）
-          h('div', { class: 'a2a-item-actions' }, [
-            h('button', {
-              class: 'ghost',
-              type: 'button',
-              disabled: testing.value.has(refItem.id),
-              onClick: () => void handleTest(refItem),
-            }, testing.value.has(refItem.id) ? t('a2a.testing') : t('a2a.testConnection')),
-            h('button', {
-              class: 'ghost',
-              type: 'button',
-              onClick: () => emit('edit', refItem.id),
-            }, t('a2a.edit')),
-            h('button', {
-              class: armed ? 'ghost danger-ghost danger-ghost-armed' : 'ghost danger-ghost',
-              type: 'button',
-              onClick: () => handleRemoveClick(refItem.id),
-            }, armed ? t('a2a.confirmRemove') : t('a2a.remove')),
-          ]),
-          // A5 测试结果分级：成功绿 / 失败红（左缘状态条）
-          result
-            ? h('p', { class: `a2a-test-result a2a-test-result-${result.kind}` }, result.text)
-            : null,
-        ]);
+        return (
+          <div class={['a2a-item', refItem.enabled ? '' : 'a2a-item-off']} key={refItem.id}>
+            {/* A2 卡片头只留 id + 状态徽章（操作独立成行） */}
+            <div class="a2a-item-head">
+              <span class="a2a-item-id" title={refItem.id}>
+                {refItem.id}
+              </span>
+              <span class="a2a-item-state">{refItem.enabled ? t('a2a.enabled') : t('a2a.disabled')}</span>
+            </div>
+            {/* 协议徽标（2026-09-16 协议配置扩展） */}
+            {metaRow(t('a2a.protocol.label'), metaBadge(isDify ? t('a2a.protocol.dify') : t('a2a.protocol.jsonrpc'), 'muted'))}
+            {isDify
+              ? metaRow(t('a2a.form.endpoint'), refItem.endpoint ?? '', refItem.endpoint)
+              : metaRow(t('a2a.cardUrl'), refItem.cardUrl ?? '', refItem.cardUrl)}
+            {!isDify
+              ? metaRow(
+                  t('a2a.endpointOverride'),
+                  refItem.endpointOverride !== undefined
+                    ? refItem.endpointOverride
+                    : metaBadge(t('a2a.noOverride'), 'muted'),
+                  refItem.endpointOverride
+                )
+              : null}
+            {metaRow(
+              'Token',
+              metaBadge(tokenSet ? t('a2a.tokenSet') : t('a2a.tokenUnset'), tokenSet ? 'ok' : 'muted')
+            )}
+            {/* A2 操作区独立成行：测试连通 / 编辑 / 删除（A3 删除红描边 + 两步确认） */}
+            <div class="a2a-item-actions">
+              <button
+                class="ghost"
+                type="button"
+                disabled={testing.value.has(refItem.id)}
+                onClick={() => void handleTest(refItem)}
+              >
+                {testing.value.has(refItem.id) ? t('a2a.testing') : t('a2a.testConnection')}
+              </button>
+              <button
+                class="ghost"
+                type="button"
+                onClick={() => emit('edit', refItem.id)}
+              >
+                {t('a2a.edit')}
+              </button>
+              <button
+                class={armed ? 'ghost danger-ghost danger-ghost-armed' : 'ghost danger-ghost'}
+                type="button"
+                onClick={() => handleRemoveClick(refItem.id)}
+              >
+                {armed ? t('a2a.confirmRemove') : t('a2a.remove')}
+              </button>
+            </div>
+            {/* A5 测试结果分级：成功绿 / 失败红（左缘状态条） */}
+            {result ? <p class={`a2a-test-result a2a-test-result-${result.kind}`}>{result.text}</p> : null}
+          </div>
+        );
       });
 
       // A6 空态卡片 + 内嵌「新增绑定」CTA
       if (rows.length === 0) {
-        return h('div', { class: 'page-empty' }, [
-          h('p', t('a2a.noBindings')),
-          h('button', { class: 'ghost', type: 'button', onClick: () => emit('add') }, t('a2a.add.title')),
-        ]);
+        return (
+          <div class="page-empty">
+            <p>{t('a2a.noBindings')}</p>
+            <button class="ghost" type="button" onClick={() => emit('add')}>
+              {t('a2a.add.title')}
+            </button>
+          </div>
+        );
       }
-      return h('div', { class: 'a2a-binding-list' }, rows);
+      return <div class="a2a-binding-list">{rows}</div>;
     };
   },
 });

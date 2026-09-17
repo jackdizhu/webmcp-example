@@ -6,6 +6,7 @@
     "lib": ["ES2024", "DOM", "DOM.Iterable"],
     "moduleResolution": "bundler",
     "jsx": "react-jsx",
+    "jsxImportSource": "vue",
 
     // Strict type checking（增强安全性）
     "strict": true,

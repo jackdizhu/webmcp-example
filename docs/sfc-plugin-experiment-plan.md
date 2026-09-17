@@ -1,5 +1,7 @@
 # 实验方案：vp pack 挂载 @vitejs/plugin-vue 解锁 SFC
 
+> **【历史档案 · 已收尾】** 本实验按路径 1 完成并通过全部校验（2026-09-16）。随后于 **2026-09-17 被「全量 TSX 迁移」取代**：侧栏 22 个组件/页面统一改为 `.tsx`，`@vitejs/plugin-vue` 已从 `vite.config.ts` 与 `package.json` 移除，JSX 改由 oxc 按 `tsconfig.base.json`（`jsx: react-jsx` + `jsxImportSource: vue`）构建期转译为 `vue/jsx-runtime`，运行时零 eval。现行规范见 `rules/coding-style.md` §3（v1.6.0），迁移决策见 `issues/001` 2026-09-17 后记。以下正文保留作历史记录，**其中的「接入方式 / 改动清单 / 回滚方案」不再反映仓库现状**。
+
 > 目标：用一次最小实验验证 `vite-plus@0.1.24` 的 `PackUserConfig.plugins` 能否承载 `@vitejs/plugin-vue`，在 MV3 扩展页 CSP 下跑通「构建期编译 SFC → 渲染函数产物」。
 > 背景分析见 `rules/coding-style.md` §3「SFC 启用路径」与 `issues/001`。本文标注 **【已验证】/【推断】** 的结论均附证据位置。
 

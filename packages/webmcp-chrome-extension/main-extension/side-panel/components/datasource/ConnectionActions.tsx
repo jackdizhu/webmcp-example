@@ -1,8 +1,9 @@
 // 连接刷新操作组件：webmcp / relay 连接重建入口（操作态，非表单）。
 // 自 DataSourcePage 迁出（2026-09-13 编辑态/只读态拆分）：fire-and-forget，
 // 本地 reconnecting ref 仅做 1s 按钮节流，重建结果经顶部 RelayStatusBar 状态快照展示。
-// 模板用 h() 渲染函数（MV3 扩展页 CSP 禁止运行时字符串编译，见 issues/001）。
-import { defineComponent, h, ref, type PropType } from 'vue';
+// 模板用 TSX：构建期经 oxc 转译为 vue/jsx-runtime 函数调用，运行时零 eval，
+// 与 MV3 扩展页 CSP 兼容（见 issues/001）。
+import { defineComponent, ref, type PropType } from 'vue';
 import { t } from '../../i18n';
 import { logEvent } from '../../logger/logger';
 import type { RelayStatusClient } from '../../relay/relay-status-client';
@@ -33,36 +34,29 @@ export const ConnectionActions = defineComponent({
       }
     };
 
-    return () =>
-      h('section', { class: 'datasource-connections' }, [
-        h('h4', t('ds.actions.title')),
-        h(
-          'p',
-          { class: 'relay-source-mode' },
-          t('ds.actions.hint')
-        ),
-        h('div', { class: 'debug-actions' }, [
-          h(
-            'button',
-            {
-              class: 'ghost',
-              type: 'button',
-              disabled: props.locked || reconnecting.value !== null,
-              onClick: () => recreateConnection('webmcp'),
-            },
-            reconnecting.value === 'webmcp' ? t('ds.actions.rebuilding') : t('ds.actions.webmcp')
-          ),
-          h(
-            'button',
-            {
-              class: 'ghost',
-              type: 'button',
-              disabled: props.locked || reconnecting.value !== null,
-              onClick: () => recreateConnection('relay'),
-            },
-            reconnecting.value === 'relay' ? t('ds.actions.rebuilding') : t('ds.actions.relay')
-          ),
-        ]),
-      ]);
+    return () => (
+      <section class="datasource-connections">
+        <h4>{t('ds.actions.title')}</h4>
+        <p class="relay-source-mode">{t('ds.actions.hint')}</p>
+        <div class="debug-actions">
+          <button
+            class="ghost"
+            type="button"
+            disabled={props.locked || reconnecting.value !== null}
+            onClick={() => recreateConnection('webmcp')}
+          >
+            {reconnecting.value === 'webmcp' ? t('ds.actions.rebuilding') : t('ds.actions.webmcp')}
+          </button>
+          <button
+            class="ghost"
+            type="button"
+            disabled={props.locked || reconnecting.value !== null}
+            onClick={() => recreateConnection('relay')}
+          >
+            {reconnecting.value === 'relay' ? t('ds.actions.rebuilding') : t('ds.actions.relay')}
+          </button>
+        </div>
+      </section>
+    );
   },
 });

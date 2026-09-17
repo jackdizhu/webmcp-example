@@ -32,7 +32,7 @@
 
 | # | 约束 | 影响 |
 | --- | --- | --- |
-| C1 | MV3 CSP 禁 eval | 引入库零 eval；UI 走 h() |
+| C1 | MV3 CSP 禁 eval | 引入库零 eval；UI 走 TSX |
 | C2 | side panel 无 Node API | skills 以静态资产/内置数据分发 |
 | C3 | IIFE 单文件，体积敏感 | 新依赖克制 |
 | C4 | 优先复用上游、catalog 管版本 | 新依赖进 catalog |

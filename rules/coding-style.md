@@ -9,7 +9,7 @@
 | :--- | :--- | :--- | :--- |
 | **可维护性** | **25%** | 模块按职责拆分，逻辑复用性高，状态流向清晰。 | UI 与逻辑解耦，需求变更成本低。 |
 | **稳定性** | **25%** | 无运行时崩溃，消息通道生命周期安全，错误边界完善。 | 用户操作不卡顿、不白屏。 |
-| **可阅读性** | **20%** | 命名语义直白，`h()` 结构清晰，逻辑一目了然。 | 协作开发无痛点，代码即文档。 |
+| **可阅读性** | **20%** | 命名语义直白，TSX 模板结构清晰，逻辑一目了然。 | 协作开发无痛点，代码即文档。 |
 | **低复杂度** | **15%** | 单文件行数受控，Watch/Effect 依赖少。 | 避免渲染性能陷阱与超长文件（阈值见 `project-rules.md` §4）。 |
 | **扩展性** | **15%** | 工具颗粒度合理，MCP 工具易于插拔。 | 支持快速接入新能力。 |
 
@@ -118,23 +118,26 @@
 
 出现以下信号即应计划重构：重复代码、超长函数 / 超大类、依恋其他模块数据的函数、总是捆绑出现的数据泥团、每次改动都波及多处（霰弹式修改）、注释解释不了为什么只能解释做什么。重构保持功能不变、小步迭代验证（呼应 `project-rules.md` §6）。
 
-## 3. Vue 3 in MV3：渲染函数规范（chrome-extension 专属）
+## 3. Vue 3 in MV3：TSX 规范（chrome-extension 专属）
 
-> 根因案例见 `issues/001-vue-runtime-template-csp-eval.md`；CSP 规则全文见 `project-rules.md` §8。
+> 根因案例见 `issues/001-vue-runtime-template-csp-eval.md`；CSP 规则全文见 `project-rules.md` §8。2026-09-17 已全量迁移 TSX（22 个组件/页面 `.tsx`），取代早期 h() 渲染函数与 SFC（`@vitejs/plugin-vue`）双轨方案。
 
-*   **禁止的是运行时模板，不是 SFC 本身**：扩展页 CSP 禁 `unsafe-eval`；SFC 在**构建期**由 `@vitejs/plugin-vue` 编译为渲染函数，运行时零 eval，CSP 安全（2026-09-16 实验已验证）。**运行时字符串 `template` 仍一律禁止**（`vue.esm-bundler` alias 同禁）；模板指令知识迁移为渲染函数写法：条件用三目 / `&&`，列表用 `arr.map()`。
-*   **SFC 组件已解锁，块顺序固定为 `template` → `script`**：
-    *   视图结构放文件最前（`<template>` → `<script setup lang="ts">` →（禁用中的）`<style>`），样板 `components/sfc/PilotHello.vue`。
-    *   SFC **禁止携带 `<style>` 块**——样式仍集中 `style/` 目录（按页面/组件拆分的纯 CSS 文件），规避 tsdown CSS 资产不确定性。
-    *   新组件可用 SFC；存量 `h()` 组件并存、渐进迁移、不强迁。SFC 组件放 `components/sfc/`，与存量 `h()` 组件目录区分。
-*   **SFC 接入方式（路径 1 已验证可用）**：`vite.config.ts` 的 `sidePanelBase` 挂 `plugins: [vue()]`（`@vitejs/plugin-vue@^6.0.9`，devDependency），main/e2e 两个 side-panel 组共享生效。备选路径（未采用，留档）：② `@vue/compiler-sfc` 预编译外挂；③ side-panel 单独原生 Vite。历史背景：`vite-plus@0.1.24` 的 `PackUserConfig` 类型实际含 `plugins?: TsdownPluginOption`（`vite-plus-core/dist/tsdown/index-types.d.ts:2147`），推翻「vite-plus 不支持插件」的早期结论。
+*   **禁止的是运行时求值，不是模板语法本身**：扩展页 CSP 禁 `unsafe-eval`。TSX 在**构建期**由 vite-plus 内置的 oxc 转译为 `vue/jsx-runtime` 的 `jsx()` 调用（内部实现即 `h(type, props, children)`），运行时零 eval，CSP 安全。**运行时字符串 `template` 仍一律禁止**（`vue.esm-bundler` alias 同禁）；模板指令知识迁移为 JSX 写法：条件用三目 / `&&`，列表用 `arr.map()`，`v-model` 手写 `value` + `onInput`（复选框用 `checked` + `onChange`）。
+*   **组件一律 `.tsx`，构建链纯 tsconfig 驱动、零插件依赖**：
+    *   `tsconfig.base.json` 固定 `"jsx": "react-jsx"` + `"jsxImportSource": "vue"`，同时驱动 tsc 类型检查与 oxc 构建转译（oxc 转换时按文件就近解析 tsconfig 消费这两个字段）。**不得在 vite.config `PackUserConfig` 里另配 oxc**（类型不收）；oxc 默认 importSource 是 `react`，漏配 tsconfig 会把 JSX 错链到 react——新增 tsconfig 时必须同步这两字段。
+    *   **不使用 `@vitejs/plugin-vue` / `.vue` SFC**（2026-09-17 已从 vite.config 与 package.json 移除；SFC 实验历史见 `docs/sfc-plugin-experiment-plan.md`）。
+    *   **JSX 类型 shim**：`main-extension/side-panel/jsx-shim.d.ts` 模块增强 `declare module 'vue' { interface ReservedProps { children?: unknown } }`（Vue 3.5 `vue/jsx-runtime` 未声明 children 的官方缺口，缺失则全量 .tsx 报 TS2322）。该 `.d.ts` 必须含 `export {}` 使文件成为模块——否则 `declare module 'vue'` 被解析为环境模块声明，覆盖 vue 全部类型（症状：`Module 'vue' has no exported member 'ref'` 全量爆红）。
+*   **TSX 写法约束（Vue JSX 特有，与 React 不同）**：
+    *   **emits 用 camelCase**：JSX 属性名不支持 kebab-case（`onToggle-settings` 非法）；`'update:xxx'` 例外——namespaced 属性 `onUpdate:modelValue` 合法。Vue 运行时对 emit 名称做 camelize 归一，camelCase 声明与调用行为不变。
+    *   具名 slot 用 children 对象传函数：`{{ actions: () => [...] }}`；默认 slot 直接写 JSX 子节点。
+    *   SVG kebab 属性（`stroke-width` / `stroke-linecap`）、`aria-*`、`for`、`spellcheck` 在 Vue JSX 类型中直接可用，无需改名。
 *   **`vue` 一律默认 runtime 构建**，禁止 alias 到 `vue/dist/vue.esm-bundler.js`；Vue 特性旗标必须经构建 `define` 显式声明。
 *   **响应式**：
     *   优先 `ref`；仅在对象结构固定且需深层响应式时用 `reactive`。
     *   **严禁直接解构 `reactive` 对象**，用 `toRefs` / `storeToRefs`。
     *   **陷阱（已踩坑）**：push 进 `reactive` 数组必须 push **代理对象**，push raw 对象会原位变更绕过响应式（症状：工具响应不立即展示）。
     *   避免深层 `watch` 大对象，精确监听具体属性或用 `computed` 派生。
-*   **组件组织**：组件用 `h()` 函数 + 固定类名，放 `components/`；页面放 `pages/`；`App.ts` 只做编排。复用逻辑提取为 `useXxx` 组合函数。
+*   **组件组织**：组件用 `.tsx` + 固定类名，放 `components/`；页面放 `pages/`；`App.tsx` 只做编排。纯类型文件用 `.ts`（如 `components/types.ts`）。复用逻辑提取为 `useXxx` 组合函数。
 *   **样式**：侧栏视觉层在 `main-extension/side-panel/style/` 目录，按页面/组件拆分为独立 CSS 文件（2026-09-16 由单一 `side-panel.css` 拆出；更早的 2026-09-15 由 side-panel.html 内联 `<style>` 拆出）——`tokens`（设计令牌）/ `base`（reset、按钮基线、聚焦环、滚动条）/ `shared`（子页面框架、模式切换行、空态）/ `header` / `tabs` / `chat` / `relay` / `datasource` / `a2a` / `settings` / `debug` 共 11 个文件，另设 `index.css` 聚合入口（`@import` 按序引入全部文件），HTML 仅经单一 `<link>` 引入 `index.css`，**index.css 内 `@import` 顺序即级联顺序，不可乱序**（新增拆分文件须同步追加 import）；构建时 HTML + style 目录整体拷入 dist（`copySidePanelHtml`）。组件零内联样式、零 scoped 样式，改某页样式只动对应文件（不可能影响行为）；状态推导优先用 `:has()`，避免类名扩散。
 
 ## 4. chrome-extension：消息通信与注入规范
@@ -185,11 +188,11 @@
 
 要求 AI 生成代码时使用以下 Prompt，确保符合本工程规范：
 
-> **Role**：精通 TypeScript、Chrome MV3 扩展、Vue3 渲染函数与 MCP 协议的前端专家。
-> **Context**：我们在维护一个 pnpm monorepo：MV3 扩展（Vue `h()` 渲染函数，CSP 禁 eval）+ WebMCP 页面工具 SPA + Node WebSocket relay + 纯逻辑共享库。
+> **Role**：精通 TypeScript、Chrome MV3 扩展、Vue3 TSX 与 MCP 协议的前端专家。
+> **Context**：我们在维护一个 pnpm monorepo：MV3 扩展（Vue TSX，构建期经 oxc 转译为零 eval 产物，CSP 禁 eval）+ WebMCP 页面工具 SPA + Node WebSocket relay + 纯逻辑共享库。
 >
 > **Coding Standards (Strict)**：
-> 1. **Vue**：组件可用 SFC（块顺序固定 `template` → `script`，禁 `<style>`，放 `components/sfc/`）或 `h()` 渲染函数；运行时字符串模板 / `eval` 一律禁止；reactive 数组 push 必须用代理对象。
+> 1. **Vue**：组件一律 `.tsx`（构建期 oxc 按 `tsconfig.base.json` 的 `jsx`/`jsxImportSource: vue` 转译为 `vue/jsx-runtime`，零 eval）；运行时字符串模板 / `eval` 一律禁止；emits 用 camelCase（`'update:xxx'` 例外）；reactive 数组 push 必须用代理对象。
 > 2. **TS**：按 `tsconfig.base.json` 全量严格旗标书写；**严禁 `any`**，不确定类型用 `unknown` + 收窄。
 > 3. **消息通信**：`Port.postMessage` try/catch；扩展页→content script 用 `tabs.connect`；注入函数自包含。
 > 4. **MCP 工具**：单一职责；内置工具结果经 `toBuiltinToolResult()` 返回 `CallToolResult`；`document.modelContext` 判空。
@@ -203,6 +206,7 @@
 
 | 版本 | 日期 | 变更内容 |
 | ---- | ---- | -------- |
+| 1.6.0 | 2026-09-17 | 全量 TSX 迁移：侧栏 22 个组件/页面由 `.ts`（h()）与 `.vue`（SFC）统一改为 `.tsx`；§3 改写为 TSX 规范——tsconfig 驱动 oxc（`jsx: react-jsx` + `jsxImportSource: vue`）零插件依赖、jsx-shim.d.ts 补 Vue 3.5 children 类型缺口（须 `export {}`）、emits camelCase（`'update:xxx'` 例外）；`@vitejs/plugin-vue` 已从 vite.config/package.json 移除（lockfile 同步待用户 `pnpm install` + `pnpm build` 实证）；SFC 实验文档转历史档案 |
 | 1.5.1 | 2026-09-16 | 侧栏样式按页面/组件拆分：`side-panel.css` → `style/` 目录 11 文件（tokens/base/shared/header/tabs/chat/relay/datasource/a2a/settings/debug）+ `index.css` 聚合入口（`@import` 按序引入，顺序即级联顺序）；HTML 单 `<link>` 引入 index.css、vite 拷贝逻辑/§3 样式条款同步更新（选择器集合校验 252=252 零丢失） |
 | 1.5.0 | 2026-09-16 | SFC 正式解锁：路径 1（vp pack + `@vitejs/plugin-vue@^6.0.9`）构建期验证通过（dist 无 `new Function`/`eval`，试点组件编译痕迹在）；§3 新增 SFC 组件规范——**块顺序固定 `template` → `script`**、禁 `<style>`、放 `components/sfc/`、与存量 `h()` 并存渐进迁移；AI 生成指令同步 |
 | 1.4.1 | 2026-09-15 | 侧栏样式拆分为独立 `side-panel.css`（HTML 13 行 + CSS 562 行，同步修正「1515 行超阈值」的不实记忆）；§3 样式条款与 SFC 路径表述同步更新 |

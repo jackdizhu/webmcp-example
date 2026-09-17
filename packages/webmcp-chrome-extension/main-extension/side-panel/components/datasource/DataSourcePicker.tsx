@@ -3,8 +3,9 @@
 // 状态徽章移入 Summary，本组件只保留选择交互。
 // 语义保留（2026-09-12 口径）：checkbox 勾选/重置为「操作」而非表单 —— 即点即生效
 // （合并选中集发 SW，全端生效），无草稿、不受执行锁约束。
-// 模板用 h() 渲染函数（MV3 扩展页 CSP 禁止运行时字符串编译，见 issues/001）。
-import { defineComponent, h, type PropType } from 'vue';
+// 模板用 TSX：构建期经 oxc 转译为 vue/jsx-runtime 函数调用，运行时零 eval，
+// 与 MV3 扩展页 CSP 兼容（见 issues/001）。
+import { defineComponent, type PropType } from 'vue';
 import type { RelayTabSelection, RelayTabStatus } from '../../../../core/relay-status-protocol';
 import { t } from '../../i18n';
 import { logEvent } from '../../logger/logger';
@@ -45,47 +46,43 @@ export const DataSourcePicker = defineComponent({
         if (aSelected !== bSelected) return aSelected - bSelected;
         return a.tabId - b.tabId;
       });
-      return h('section', { class: 'relay-source-picker' }, [
-        h('h4', t('ds.picker.title')),
-        h(
-          'p',
-          { class: 'relay-source-mode' },
-          t('ds.picker.globalSelection', { count: props.selection.tabIds.length })
-        ),
-        sorted.length === 0
-          ? h('div', { class: 'page-empty' }, t('ds.picker.empty'))
-          : h(
-              'ul',
-              { class: 'relay-source-list' },
-              sorted.map((status) =>
-                h('li', { class: 'relay-source-item', key: String(status.tabId) }, [
-                  h('label', { class: 'relay-source-label' }, [
-                    h('input', {
-                      type: 'checkbox',
-                      checked: status.selected === true,
-                      onChange: (event: Event) => {
+      return (
+        <section class="relay-source-picker">
+          <h4>{t('ds.picker.title')}</h4>
+          <p class="relay-source-mode">
+            {t('ds.picker.globalSelection', { count: props.selection.tabIds.length })}
+          </p>
+          {sorted.length === 0 ? (
+            <div class="page-empty">{t('ds.picker.empty')}</div>
+          ) : (
+            <ul class="relay-source-list">
+              {sorted.map((status) => (
+                <li class="relay-source-item" key={String(status.tabId)}>
+                  <label class="relay-source-label">
+                    <input
+                      type="checkbox"
+                      checked={status.selected === true}
+                      onChange={(event: Event) => {
                         toggleTab(status.tabId, (event.target as HTMLInputElement).checked);
-                      },
-                    }),
-                    h(
-                      'span',
-                      { class: 'relay-source-title' },
-                      status.title || status.url || t('common.tabLabel', { id: status.tabId })
-                    ),
-                  ]),
-                ])
-              )
-            ),
-        h(
-          'button',
-          {
-            class: 'ghost relay-source-reset',
-            type: 'button',
-            onClick: () => resetSelection(),
-          },
-          t('ds.picker.reset')
-        ),
-      ]);
+                      }}
+                    />
+                    <span class="relay-source-title">
+                      {status.title || status.url || t('common.tabLabel', { id: status.tabId })}
+                    </span>
+                  </label>
+                </li>
+              ))}
+            </ul>
+          )}
+          <button
+            class="ghost relay-source-reset"
+            type="button"
+            onClick={() => resetSelection()}
+          >
+            {t('ds.picker.reset')}
+          </button>
+        </section>
+      );
     };
   },
 });

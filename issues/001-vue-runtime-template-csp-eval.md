@@ -43,6 +43,14 @@ at new Function (<anonymous>)
 - `pnpm typecheck` / `pnpm lint` / `pnpm test`（49 passed）全绿。
 - 产物级验证：重新 `build` 并加载 `dist/` 后侧栏正常渲染。
 
+## 后记（2026-09-17）：全量 TSX 迁移，SFC/plugin-vue 方案退场
+
+- 侧栏 22 个组件/页面（App、6 个页面、15 个组件）已全量由 `.ts`（h() 渲染函数）与 `.vue`（SFC）统一迁移为 **`.tsx`**（三闸门全绿：tsc 0 错 / vitest 182 测试全过 / eslint 0 问题）。
+- 2026-09-16 后记中的 plugin-vue 路径已**退役**：`@vitejs/plugin-vue` 从 `vite.config.ts` 与 `package.json` 移除（lockfile 同步待用户 `pnpm install`）。JSX 改由 vite-plus 内置 oxc 在构建期转译——按 `tsconfig.base.json` 的 `jsx: react-jsx` + `jsxImportSource: vue` 就近解析消费，产出 `vue/jsx-runtime` 的 `jsx()` 调用（内部实现即 `h(type, props, children)`），**运行时零 eval、零 eval 风险插件依赖**。
+- 本文「Vue 组件必须使用渲染函数」的表述仍然成立且本质不变：TSX 编译产物就是渲染函数调用（`jsx()` 内部即 `h()`），只是书写层从手写 `h()` 换成 JSX 模板。
+- 迁移中的新踩坑（已沉淀到 `rules/coding-style.md` §3 v1.6.0）：Vue 3.5 `vue/jsx-runtime` 类型缺 `children`，靠 `main-extension/side-panel/jsx-shim.d.ts` 模块增强 `ReservedProps`（该 `.d.ts` 必须含 `export {}`，否则 `declare module 'vue'` 变环境声明覆盖 vue 全部类型）；JSX 属性名不支持 kebab-case，emits 改 camelCase（运行时 camelize 归一，行为不变）。
+- 现行规范见 `rules/coding-style.md` §3（v1.6.0）：组件一律 `.tsx`、tsconfig 驱动 oxc 零插件依赖、运行时字符串模板禁令不变；SFC 实验历史见 `docs/sfc-plugin-experiment-plan.md`（已转历史档案）。
+
 ## 后记（2026-09-16）：SFC 解锁，约束边界收窄
 
 - 本 issue 禁令的准确边界是「运行时求值」，而非「SFC」。SFC 经构建期编译即渲染函数，运行时零 eval。

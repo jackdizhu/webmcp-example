@@ -7,8 +7,9 @@
 // - dify：chat-messages 接口地址 + 显示名/描述 + 响应模式 + inputs 默认值（JSON）+ API Key。
 // 草稿态：可选文本字段统一用空串表示「未填写」（exactOptionalPropertyTypes 字段移除语义），
 // 协议分支的归一化落库由宿主（A2aAgentsSection.handleFormSubmit）完成。
-// 模板用 h() 渲染函数（MV3 扩展页 CSP 禁止运行时字符串编译，见 issues/001）。
-import { defineComponent, h, ref, watch, type PropType, type VNode } from 'vue';
+// 模板用 TSX：构建期经 oxc 转译为 vue/jsx-runtime 函数调用，运行时零 eval，
+// 与 MV3 扩展页 CSP 兼容（见 issues/001）。
+import { defineComponent, ref, watch, type PropType, type VNode } from 'vue';
 import { isHttpUrl, validateA2aAgentId, type AgentA2aProtocol, type AgentA2aRef } from 'webmcp-agent-chat-core';
 import { t } from '../../i18n';
 
@@ -166,143 +167,163 @@ export const A2aBindingForm = defineComponent({
       const isAdd = props.mode === 'add';
       const isDify = draftProtocol.value === 'dify';
       // A7：字段补 label（输入后 placeholder 消失仍可辨认字段语义；可选字段在标签中标注）
-      const field = (label: string, control: VNode | VNode[]): VNode =>
-        h('label', { class: 'a2a-form-field' }, [h('span', label), control]);
+      const field = (label: string, control: VNode | VNode[]): VNode => (
+        <label class="a2a-form-field">
+          <span>{label}</span>
+          {control}
+        </label>
+      );
       const textInput = (
         value: string,
         placeholder: string,
         onInput: (value: string) => void,
         type: 'text' | 'url' | 'password' = 'text'
-      ): VNode =>
-        h('input', {
-          type,
-          placeholder,
-          autocomplete: type === 'password' ? 'off' : undefined,
-          value,
-          onInput: (event: Event) => {
+      ): VNode => (
+        <input
+          type={type}
+          placeholder={placeholder}
+          autocomplete={type === 'password' ? 'off' : undefined}
+          value={value}
+          onInput={(event: Event) => {
             onInput((event.target as HTMLInputElement).value);
-          },
-        });
+          }}
+        />
+      );
       // 协议单选（两选项共享 name 分组）
-      const protocolRadio = (value: AgentA2aProtocol, label: string): VNode =>
-        h('label', { class: 'a2a-form-radio' }, [
-          h('input', {
-            type: 'radio',
-            name: 'a2a-form-protocol',
-            checked: draftProtocol.value === value,
-            onChange: () => {
+      const protocolRadio = (value: AgentA2aProtocol, label: string): VNode => (
+        <label class="a2a-form-radio">
+          <input
+            type="radio"
+            name="a2a-form-protocol"
+            checked={draftProtocol.value === value}
+            onChange={() => {
               draftProtocol.value = value;
               error.value = '';
-            },
-          }),
-          h('span', label),
-        ]);
+            }}
+          />
+          <span>{label}</span>
+        </label>
+      );
 
-      return h('div', { class: 'a2a-add-form' }, [
-        // id：add = 可编辑输入（格式/重复校验）；edit = 只读标签 + 启停开关（创建后不可修改）
-        isAdd
-          ? field(
+      return (
+        <div class="a2a-add-form">
+          {/* id：add = 可编辑输入（格式/重复校验）；edit = 只读标签 + 启停开关（创建后不可修改） */}
+          {isAdd ? (
+            field(
               t('a2a.form.id'),
               textInput(draftId.value, t('a2a.add.idPlaceholder'), (value) => {
                 draftId.value = value;
               })
             )
-          : h('div', { class: 'a2a-item-head' }, [
-              h('input', {
-                type: 'checkbox',
-                id: 'a2a-item-enabled',
-                checked: enabled.value,
-                title: t('a2a.enableTitle'),
-                onChange: (event: Event) => {
+          ) : (
+            <div class="a2a-item-head">
+              <input
+                type="checkbox"
+                id="a2a-item-enabled"
+                checked={enabled.value}
+                title={t('a2a.enableTitle')}
+                onChange={(event: Event) => {
                   enabled.value = (event.target as HTMLInputElement).checked;
-                },
-              }),
-              h('label', { class: 'a2a-item-id', for: 'a2a-item-enabled', title: t('a2a.form.id') }, props.item?.id ?? ''),
-              h('span', { class: 'a2a-item-state' }, enabled.value ? t('a2a.enabled') : t('a2a.disabled')),
-            ]),
-        // 协议单选（2026-09-16 协议配置扩展）
-        field(t('a2a.form.protocol'), [
-          protocolRadio('jsonrpc', t('a2a.protocol.jsonrpc')),
-          protocolRadio('dify', t('a2a.protocol.dify')),
-        ]),
-        isDify
-          ? [
-              field(
-                t('a2a.form.endpoint'),
-                textInput(endpoint.value, t('a2a.add.endpointDifyPlaceholder'), (value) => {
-                  endpoint.value = value;
-                }, 'url')
-              ),
-              field(
-                t('a2a.form.displayNameOptional'),
-                textInput(displayName.value, t('a2a.add.displayNamePlaceholder'), (value) => {
-                  displayName.value = value;
-                })
-              ),
-              field(
-                t('a2a.form.descriptionOptional'),
-                textInput(description.value, t('a2a.add.descriptionPlaceholder'), (value) => {
-                  description.value = value;
-                })
-              ),
-              field(
-                t('a2a.form.responseMode'),
-                h('select', {
-                  value: responseMode.value,
-                  onChange: (event: Event) => {
-                    responseMode.value = (event.target as HTMLSelectElement).value as 'streaming' | 'blocking';
-                  },
-                }, [
-                  h('option', { value: 'streaming' }, t('a2a.responseMode.streaming')),
-                  h('option', { value: 'blocking' }, t('a2a.responseMode.blocking')),
-                ])
-              ),
-              field(
-                t('a2a.form.inputsOptional'),
-                textInput(inputsJson.value, t('a2a.add.inputsPlaceholder'), (value) => {
-                  inputsJson.value = value;
-                })
-              ),
-              field(
-                t('a2a.form.tokenDifyOptional'),
-                textInput(draftToken.value, isAdd ? t('a2a.add.tokenDifyPlaceholder') : t('a2a.tokenPlaceholder', { id: props.item?.id ?? '' }), (value) => {
-                  draftToken.value = value;
-                }, 'password')
-              ),
-            ]
-          : [
-              field(
-                t('a2a.cardUrl'),
-                textInput(cardUrl.value, isAdd ? t('a2a.add.cardUrlPlaceholder') : 'https://example.com/.well-known/agent-card.json', (value) => {
-                  cardUrl.value = value;
-                }, 'url')
-              ),
-              field(
-                t('a2a.form.endpointOptional'),
-                textInput(endpointOverride.value, t('a2a.endpointPlaceholder'), (value) => {
-                  endpointOverride.value = value;
-                }, 'url')
-              ),
-              field(
-                t('a2a.form.tokenOptional'),
-                textInput(draftToken.value, isAdd ? t('a2a.add.tokenPlaceholder') : t('a2a.tokenPlaceholder', { id: props.item?.id ?? '' }), (value) => {
-                  draftToken.value = value;
-                }, 'password')
-              ),
-            ],
-        error.value ? h('p', { class: 'settings-hint settings-hint-error' }, error.value) : null,
-        isAdd
-          ? h('button', { type: 'button', disabled: props.busy, onClick: () => handleSubmit() }, t('a2a.add.submit'))
-          : h('div', { class: 'a2a-edit-actions' }, [
-              h('button', { type: 'button', disabled: props.busy, onClick: () => handleSubmit() }, t('common.save')),
-              h('button', {
-                class: 'ghost',
-                type: 'button',
-                disabled: props.busy,
-                onClick: () => emit('cancel'),
-              }, t('common.cancel')),
-            ]),
-      ]);
+                }}
+              />
+              <label class="a2a-item-id" for="a2a-item-enabled" title={t('a2a.form.id')}>
+                {props.item?.id ?? ''}
+              </label>
+              <span class="a2a-item-state">{enabled.value ? t('a2a.enabled') : t('a2a.disabled')}</span>
+            </div>
+          )}
+          {/* 协议单选（2026-09-16 协议配置扩展） */}
+          {field(t('a2a.form.protocol'), [
+            protocolRadio('jsonrpc', t('a2a.protocol.jsonrpc')),
+            protocolRadio('dify', t('a2a.protocol.dify')),
+          ])}
+          {isDify
+            ? [
+                field(
+                  t('a2a.form.endpoint'),
+                  textInput(endpoint.value, t('a2a.add.endpointDifyPlaceholder'), (value) => {
+                    endpoint.value = value;
+                  }, 'url')
+                ),
+                field(
+                  t('a2a.form.displayNameOptional'),
+                  textInput(displayName.value, t('a2a.add.displayNamePlaceholder'), (value) => {
+                    displayName.value = value;
+                  })
+                ),
+                field(
+                  t('a2a.form.descriptionOptional'),
+                  textInput(description.value, t('a2a.add.descriptionPlaceholder'), (value) => {
+                    description.value = value;
+                  })
+                ),
+                field(
+                  t('a2a.form.responseMode'),
+                  <select
+                    value={responseMode.value}
+                    onChange={(event: Event) => {
+                      responseMode.value = (event.target as HTMLSelectElement).value as 'streaming' | 'blocking';
+                    }}
+                  >
+                    <option value="streaming">{t('a2a.responseMode.streaming')}</option>
+                    <option value="blocking">{t('a2a.responseMode.blocking')}</option>
+                  </select>
+                ),
+                field(
+                  t('a2a.form.inputsOptional'),
+                  textInput(inputsJson.value, t('a2a.add.inputsPlaceholder'), (value) => {
+                    inputsJson.value = value;
+                  })
+                ),
+                field(
+                  t('a2a.form.tokenDifyOptional'),
+                  textInput(draftToken.value, isAdd ? t('a2a.add.tokenDifyPlaceholder') : t('a2a.tokenPlaceholder', { id: props.item?.id ?? '' }), (value) => {
+                    draftToken.value = value;
+                  }, 'password')
+                ),
+              ]
+            : [
+                field(
+                  t('a2a.cardUrl'),
+                  textInput(cardUrl.value, isAdd ? t('a2a.add.cardUrlPlaceholder') : 'https://example.com/.well-known/agent-card.json', (value) => {
+                    cardUrl.value = value;
+                  }, 'url')
+                ),
+                field(
+                  t('a2a.form.endpointOptional'),
+                  textInput(endpointOverride.value, t('a2a.endpointPlaceholder'), (value) => {
+                    endpointOverride.value = value;
+                  }, 'url')
+                ),
+                field(
+                  t('a2a.form.tokenOptional'),
+                  textInput(draftToken.value, isAdd ? t('a2a.add.tokenPlaceholder') : t('a2a.tokenPlaceholder', { id: props.item?.id ?? '' }), (value) => {
+                    draftToken.value = value;
+                  }, 'password')
+                ),
+              ]}
+          {error.value ? <p class="settings-hint settings-hint-error">{error.value}</p> : null}
+          {isAdd ? (
+            <button type="button" disabled={props.busy} onClick={() => handleSubmit()}>
+              {t('a2a.add.submit')}
+            </button>
+          ) : (
+            <div class="a2a-edit-actions">
+              <button type="button" disabled={props.busy} onClick={() => handleSubmit()}>
+                {t('common.save')}
+              </button>
+              <button
+                class="ghost"
+                type="button"
+                disabled={props.busy}
+                onClick={() => emit('cancel')}
+              >
+                {t('common.cancel')}
+              </button>
+            </div>
+          )}
+        </div>
+      );
     };
   },
 });

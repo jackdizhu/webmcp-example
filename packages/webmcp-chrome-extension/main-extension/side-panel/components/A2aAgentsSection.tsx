@@ -11,8 +11,9 @@
 // → App handleSaveA2aConfig 落盘）；token 在 a2aTokens 键，随保存整批落盘 ——
 // 本组件零 chrome.*，全部经 props/emits/函数 prop 与宿主交互。
 // 决策（2026-09-12）：agentKey（id）一经创建不可变，UI 不提供 id 编辑（改 URL 不改名）。
-// 模板用 h() 渲染函数（MV3 扩展页 CSP 禁止运行时字符串编译，见 issues/001）。
-import { defineComponent, h, ref, type PropType } from 'vue';
+// 模板用 TSX：构建期经 oxc 转译为 vue/jsx-runtime 函数调用，运行时零 eval，
+// 与 MV3 扩展页 CSP 兼容（见 issues/001）。
+import { defineComponent, ref, type PropType } from 'vue';
 import type { AgentA2aRef } from 'webmcp-agent-chat-core';
 import { t } from '../i18n';
 import { SubPageFrame } from './SubPageFrame';
@@ -91,93 +92,90 @@ export const A2aAgentsSection = defineComponent({
     return () => {
       // A8：全局 notice 升级为卡片（边框 + 左缘状态条），失败/成功视觉分级
       const noticeNode =
-        props.notice !== null
-          ? h(
-              'p',
-              {
-                class:
-                  props.notice.kind === 'error'
-                    ? 'settings-notice settings-notice-error'
-                    : 'settings-notice settings-notice-ok',
-              },
-              props.notice.text
-            )
-          : null;
+        props.notice !== null ? (
+          <p class={props.notice.kind === 'error' ? 'settings-notice settings-notice-error' : 'settings-notice settings-notice-ok'}>
+            {props.notice.text}
+          </p>
+        ) : null;
 
       // ---- 新增子页面（独立页面：返回 icon + 标题栏）----
       if (view.value === 'add') {
-        return h('div', { class: 'settings-a2a' }, [
-          h(SubPageFrame, { title: t('a2a.add.title'), onBack: () => backToList() }, {
-            default: () => [
-              noticeNode,
-              h(A2aBindingForm, {
-                mode: 'add',
-                refs: props.refs,
-                busy: props.busy,
-                onSubmit: (payload: A2aFormPayload) => handleFormSubmit(payload),
-              }),
-            ],
-          }),
-        ]);
+        return (
+          <div class="settings-a2a">
+            <SubPageFrame title={t('a2a.add.title')} onBack={() => backToList()}>
+              {noticeNode}
+              <A2aBindingForm
+                mode="add"
+                refs={props.refs}
+                busy={props.busy}
+                onSubmit={(payload: A2aFormPayload) => handleFormSubmit(payload)}
+              />
+            </SubPageFrame>
+          </div>
+        );
       }
 
       // ---- 编辑子页面（单条：返回 icon + 标题栏）----
       if (view.value === 'edit') {
         const editingItem = props.refs.find((item) => item.id === editingId.value) ?? null;
-        return h('div', { class: 'settings-a2a' }, [
-          h(
-            SubPageFrame,
-            { title: t('a2a.editItemTitle', { id: editingId.value }), onBack: () => backToList() },
-            {
-              default: () => [
-                noticeNode,
-                editingItem === null
-                  ? h('p', { class: 'settings-hint' }, t('a2a.noBindings'))
-                  : h(A2aBindingForm, {
-                      mode: 'edit',
-                      item: editingItem,
-                      token: props.a2aTokens[editingItem.id] ?? '',
-                      busy: props.busy,
-                      onSubmit: (payload: A2aFormPayload) => handleFormSubmit(payload),
-                      onCancel: () => backToList(),
-                    }),
-              ],
-            }
-          ),
-        ]);
+        return (
+          <div class="settings-a2a">
+            <SubPageFrame title={t('a2a.editItemTitle', { id: editingId.value })} onBack={() => backToList()}>
+              {noticeNode}
+              {editingItem === null ? (
+                <p class="settings-hint">{t('a2a.noBindings')}</p>
+              ) : (
+                <A2aBindingForm
+                  mode="edit"
+                  item={editingItem}
+                  token={props.a2aTokens[editingItem.id] ?? ''}
+                  busy={props.busy}
+                  onSubmit={(payload: A2aFormPayload) => handleFormSubmit(payload)}
+                  onCancel={() => backToList()}
+                />
+              )}
+            </SubPageFrame>
+          </div>
+        );
       }
 
       // ---- 列表页（默认：只读卡片 + 行级操作 + 新增入口 + 草稿保存）----
-      return h('div', { class: 'settings-a2a' }, [
-        h('p', { class: 'settings-hint' }, t('a2a.hint')),
-        noticeNode,
-        h(A2aBindingList, {
-          refs: props.refs,
-          a2aTokens: props.a2aTokens,
-          testConnection: props.testConnection,
-          onEdit: (id: string) => openEdit(id),
-          onRemove: (id: string) => emit('removeRef', id),
-          // A6 空态 CTA：从列表页直接进入新增子页面
-          onAdd: () => {
-            view.value = 'add';
-          },
-        }),
-        h('div', { class: 'page-mode-actions' }, [
-          h('button', {
-            type: 'button',
-            disabled: props.busy || props.saving,
-            onClick: () => {
+      return (
+        <div class="settings-a2a">
+          <p class="settings-hint">{t('a2a.hint')}</p>
+          {noticeNode}
+          <A2aBindingList
+            refs={props.refs}
+            a2aTokens={props.a2aTokens}
+            testConnection={props.testConnection}
+            onEdit={(id: string) => openEdit(id)}
+            onRemove={(id: string) => emit('removeRef', id)}
+            // A6 空态 CTA：从列表页直接进入新增子页面
+            onAdd={() => {
               view.value = 'add';
-            },
-          }, t('a2a.add.title')),
-          h('button', {
-            type: 'button',
-            disabled: props.busy || props.saving || !props.dirty,
-            onClick: () => emit('save'),
-          }, props.saving ? t('a2a.saving') : t('common.save')),
-        ]),
-        props.dirty ? h('p', { class: 'settings-hint' }, t('a2a.unsavedHint')) : null,
-      ]);
+            }}
+          />
+          <div class="page-mode-actions">
+            <button
+              type="button"
+              disabled={props.busy || props.saving}
+              onClick={() => {
+                view.value = 'add';
+              }}
+            >
+              {t('a2a.add.title')}
+            </button>
+            <button
+              type="button"
+              disabled={props.busy || props.saving || !props.dirty}
+              onClick={() => emit('save')}
+            >
+              {props.saving ? t('a2a.saving') : t('common.save')}
+            </button>
+          </div>
+          {props.dirty ? <p class="settings-hint">{t('a2a.unsavedHint')}</p> : null}
+        </div>
+      );
     };
   },
 });

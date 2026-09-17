@@ -1,12 +1,14 @@
 # 待改造文件清单：webmcp-chrome-extension
 
+> **【状态更新 2026-09-17】** 第一部分「h() → SFC 改造候选清单」已以 **TSX** 方式**全量完成**（22 个组件/页面 → `.tsx`，走 oxc/tsconfig 零插件路径而非 SFC 路径，三闸门全绿），该部分全部关闭；§二起的复杂度问题清单仍有效，但其中已随迁移顺手修复的条目以代码现状为准。审查依据更新为 `rules/coding-style.md` §3（TSX 规范，v1.6.0）。
+
 > 审查依据：`rules/coding-style.md` §3（SFC 规范）与 §2.1（通用代码质量规范）。
 > 审查日期：2026-09-16（基于 dev-base 工作区快照，行号为当日快照行号）。
 > 范围：`packages/webmcp-chrome-extension` 全部 `.ts` 源文件（core/ + main-extension/ + shell/ + e2e-extension/，不含 node_modules/dist）。
 
 ## 使用说明
 
-- **h() → SFC**：§3 明确「存量 h() 并存、渐进迁移、不强迁」，以下为改造候选清单，非强制项。迁移约束：块顺序固定 `template` → `script`、**禁 `<style>` 块**（样式归 `style/` 目录，按页面/组件拆分）、SFC 组件放 `components/sfc/`。
+- **h() → SFC**：§3 明确「存量 h() 并存、渐进迁移、不强迁」，以下为改造候选清单，非强制项。迁移约束：块顺序固定 `template` → `script`、**禁 `<style>` 块**（样式归 `style/` 目录，按页面/组件拆分）、SFC 组件放 `components/sfc/`。**（已关闭：2026-09-17 实际以 TSX 全量迁移完成，见顶部状态更新）**
 - **复杂度**：§2.1 硬阈值——单文件 ≤ 800 行；函数体 ≤ 50 行；圈复杂度 ≤ 10；嵌套 ≤ 3 层；参数 ≤ 3；默认值回退用 `??` 不用 `||`；魔法数字提取具名常量；禁空 catch / 吞异常。
 
 ## 一、h() → SFC 改造候选清单（21 个文件，均在 main-extension/side-panel/）
