@@ -2,8 +2,10 @@
 // 页签较多：容器横向滚动（.tabs overflow-x，见 side-panel.html），按钮不收缩换行。
 // 执行锁（locked）生效期间：全部入口禁用，仅保留「终止」按钮，避免执行中
 // 切换页面造成状态错乱（App 层负责锁的置位与终止动作）。
+// 模板用 TSX：构建期经 oxc 转译为 vue/jsx-runtime 函数调用，运行时零 eval，
+// 与 MV3 扩展页 CSP 兼容（见 issues/001）。
 // 文案经全局 i18n store（t() 直读 locale ref），切换语言自动重渲染。
-import { defineComponent, h } from 'vue';
+import { defineComponent } from 'vue';
 import { t } from '../i18n';
 import type { MessageKey } from '../i18n/zh-CN';
 
@@ -35,31 +37,29 @@ export const TabBar = defineComponent({
     abort: null,
   },
   setup(props, { emit }) {
-    const tabButton = (page: { id: PanelPage; labelKey: MessageKey }) =>
-      h(
-        'button',
-        {
-          type: 'button',
-          class: { 'tab-active': props.activeTab === page.id },
-          disabled: props.locked,
-          onClick: () => emit('update:activeTab', page.id),
-        },
-        t(page.labelKey)
-      );
+    const tabButton = (page: { id: PanelPage; labelKey: MessageKey }) => (
+      <button
+        type="button"
+        class={{ 'tab-active': props.activeTab === page.id }}
+        disabled={props.locked}
+        onClick={() => emit('update:activeTab', page.id)}
+      >
+        {t(page.labelKey)}
+      </button>
+    );
 
-    return () =>
-      h('nav', { class: ['tabs', props.locked ? 'tabs-locked' : ''] }, [
-        ...PAGES.map(tabButton),
-        props.locked
-          ? h('span', { class: 'tabs-lock-area' }, [
-              h('span', { class: 'tabs-lock-label' }, props.phaseLabel),
-              h(
-                'button',
-                { class: 'tabs-abort', type: 'button', onClick: () => emit('abort') },
-                t('tab.abort')
-              ),
-            ])
-          : null,
-      ]);
+    return () => (
+      <nav class={['tabs', props.locked ? 'tabs-locked' : '']}>
+        {PAGES.map(tabButton)}
+        {props.locked ? (
+          <span class="tabs-lock-area">
+            <span class="tabs-lock-label">{props.phaseLabel}</span>
+            <button class="tabs-abort" type="button" onClick={() => emit('abort')}>
+              {t('tab.abort')}
+            </button>
+          </span>
+        ) : null}
+      </nav>
+    );
   },
 });

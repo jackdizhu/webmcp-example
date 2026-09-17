@@ -4,8 +4,9 @@
 //   即点即生效语义保留）+ ConnectionActions（连接刷新）；返回即回只读状态表
 // 执行锁：locked 时禁用进入编辑态（连接刷新属重建类操作，锁定期间亦不可用）。
 // 本页不发起任何调用、不持有业务状态，仅按 relayStatus 是否可用裁剪编辑态操作区块。
-// 模板用 h() 渲染函数（MV3 扩展页 CSP 禁止运行时字符串编译，见 issues/001）。
-import { defineComponent, h, ref, type PropType, type VNode } from 'vue';
+// 模板用 TSX：构建期经 oxc 转译为 vue/jsx-runtime 函数调用，运行时零 eval，
+// 与 MV3 扩展页 CSP 兼容（见 issues/001）。
+import { defineComponent, ref, type PropType } from 'vue';
 import type { RelayTabSelection, RelayTabStatus } from '../../../core/relay-status-protocol';
 import { t } from '../i18n';
 import { SubPageFrame } from '../components/SubPageFrame';
@@ -38,43 +39,44 @@ export const DataSourcePage = defineComponent({
     /** 页面模式：view = 只读状态表；edit = 选择 + 连接刷新（跨页签切换保留）。 */
     const mode = ref<'view' | 'edit'>('view');
 
-    return () => {
+    return () => (
       // 编辑态 = 独立子页面（SubPageFrame：返回 icon + 标题栏，返回即回只读状态表；
       // 勾选/重置为即点即生效操作，无草稿语义，返回不回滚已生效的选择）
-      const body: (VNode | null)[] =
-        mode.value === 'view'
-          ? [
-              h(DataSourceSummary, { statuses: props.statuses }),
-              h('div', { class: 'page-mode-actions' }, [
-                h('button', {
-                  type: 'button',
-                  disabled: props.locked,
-                  onClick: () => {
-                    mode.value = 'edit';
-                  },
-                }, t('ds.adjust')),
-                props.locked ? h('p', { class: 'settings-hint settings-hint-warn' }, t('ds.lockedHint')) : null,
-              ]),
-            ]
-          : [
-              h(SubPageFrame, { title: t('ds.picker.title'), onBack: () => { mode.value = 'view'; } }, {
-                default: () => [
-                  h(DataSourcePicker, {
-                    statuses: props.statuses,
-                    selection: props.selection,
-                    relayStatus: props.relayStatus,
-                  }),
-                  props.relayStatus
-                    ? h(ConnectionActions, { locked: props.locked, relayStatus: props.relayStatus })
-                    : null,
-                ],
-              }),
-            ];
-      return h(
-        'div',
-        { class: 'datasource-page', style: { display: props.active ? '' : 'none' } },
-        body
-      );
-    };
+      <div class="datasource-page" style={{ display: props.active ? '' : 'none' }}>
+        {mode.value === 'view' ? (
+          <>
+            <DataSourceSummary statuses={props.statuses} />
+            <div class="page-mode-actions">
+              <button
+                type="button"
+                disabled={props.locked}
+                onClick={() => {
+                  mode.value = 'edit';
+                }}
+              >
+                {t('ds.adjust')}
+              </button>
+              {props.locked ? <p class="settings-hint settings-hint-warn">{t('ds.lockedHint')}</p> : null}
+            </div>
+          </>
+        ) : (
+          <SubPageFrame
+            title={t('ds.picker.title')}
+            onBack={() => {
+              mode.value = 'view';
+            }}
+          >
+            <DataSourcePicker
+              statuses={props.statuses}
+              selection={props.selection}
+              relayStatus={props.relayStatus}
+            />
+            {props.relayStatus ? (
+              <ConnectionActions locked={props.locked} relayStatus={props.relayStatus} />
+            ) : null}
+          </SubPageFrame>
+        )}
+      </div>
+    );
   },
 });

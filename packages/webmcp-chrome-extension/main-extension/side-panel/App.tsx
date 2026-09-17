@@ -2,9 +2,10 @@
 //
 // 职责边界：全局状态（设置/消息/页面路由/连接/调用日志）、agent 轮次编排（runTurn +
 // 终止）、执行锁（agent 对话或 relay 调用进行中禁止切换页面）、traceId 与日志埋点、
-// 生命周期（Port 桥接连断）。渲染全部下沉到 components/ 与 pages/（h() 渲染函数，
-// MV3 扩展页 CSP 禁止运行时字符串编译，见 issues/001）。
-import { computed, defineComponent, h, onMounted, onUnmounted, reactive, ref, watch } from 'vue';
+// 生命周期（Port 桥接连断）。渲染全部下沉到 components/ 与 pages/（TSX 模板：
+// 构建期经 oxc 转译为 vue/jsx-runtime 函数调用，运行时零 eval，与 MV3 扩展页
+// CSP script-src 'self' 兼容，见 issues/001）。
+import { computed, defineComponent, onMounted, onUnmounted, reactive, ref, watch } from 'vue';
 import {
   API_PATH_EMPTY_HINT,
   buildSkillL1Section,
@@ -549,88 +550,89 @@ export const App = defineComponent({
 
     // ---- 组件编排（页面级视图在 pages/，独立组件在 components/）----
 
-    return () =>
-      h('div', { class: 'panel' }, [
-        h(AppHeader, {
-          connected: connected.value,
-          toolsCount: toolsCount.value,
-          onToggleSettings: () => {
+    return () => (
+      <div class="panel">
+        <AppHeader
+          connected={connected.value}
+          toolsCount={toolsCount.value}
+          onToggleSettings={() => {
             setTab('settings');
-          },
-        }),
-        h(RelayStatusBar, { statuses: relayStore.statuses.value }),
-        h(TabBar, {
-          activeTab: activeTab.value,
-          locked: locked.value,
-          phaseLabel: phaseLabel.value,
-          'onUpdate:activeTab': (value: PanelPage) => {
+          }}
+        />
+        <RelayStatusBar statuses={relayStore.statuses.value} />
+        <TabBar
+          activeTab={activeTab.value}
+          locked={locked.value}
+          phaseLabel={phaseLabel.value}
+          onUpdate:activeTab={(value: PanelPage) => {
             setTab(value);
-          },
-          onAbort: () => terminate(),
-        }),
-        h(ChatPage, {
-          messages: messages.value,
-          busy: busy.value,
-          locked: locked.value,
-          active: activeTab.value === 'chat',
-          modelValue: input.value,
-          agents: profileStore.agents.value.map((item) => ({ id: item.id, name: item.name })),
-          activeAgentId: profileStore.activeAgentId.value,
-          pendingSwitchName: pendingSwitchName.value,
-          'onUpdate:modelValue': (value: string) => {
+          }}
+          onAbort={() => terminate()}
+        />
+        <ChatPage
+          messages={messages.value}
+          busy={busy.value}
+          locked={locked.value}
+          active={activeTab.value === 'chat'}
+          modelValue={input.value}
+          agents={profileStore.agents.value.map((item) => ({ id: item.id, name: item.name }))}
+          activeAgentId={profileStore.activeAgentId.value}
+          pendingSwitchName={pendingSwitchName.value}
+          onUpdate:modelValue={(value: string) => {
             input.value = value;
-          },
-          onSend: () => void send(),
-          onSwitchAgent: (id: string) => requestSwitchAgent(id),
-          onConfirmSwitch: () => void confirmSwitchAgent(),
-          onCancelSwitch: () => cancelSwitchAgent(),
-          onInspectPrompt: () => inspectPrompt(),
-        }),
-        pageToolsRef.value
-          ? h(DebugPage, {
-              pageTools: pageToolsRef.value,
-              active: activeTab.value === 'debug',
-              locked: locked.value,
-              onHandoff: (run: DebugRun) => {
-                void handleHandoff(run);
-              },
-            })
-          : null,
-        h(RelayPage, {
-          active: activeTab.value === 'relay',
-          invokeLogs: relayStore.invokeLogs.value,
-          runningCount: relayStore.runningCount.value,
-          terminated: relayStore.terminated.value,
-        }),
-        h(DataSourcePage, {
-          active: activeTab.value === 'datasource',
-          statuses: relayStore.statuses.value,
-          selection: relayStore.selection.value,
-          locked: locked.value,
-          relayStatus: relayStatusClient,
-        }),
-        h(A2aPage, {
-          active: activeTab.value === 'a2a',
-          refs: a2aConfig.value,
-          a2aTokens,
-          busy: locked.value,
-          saving: a2aSaving.value,
-          testConnection: handleTestA2aConnection,
-          notice: a2aNotice.value,
-          onSave: (refs: AgentA2aRef[], tokens: Record<string, string>) =>
-            void handleSaveA2aConfig(refs, tokens),
-        }),
-        h(SettingsPage, {
-          active: activeTab.value === 'settings',
-          settings,
-          busy: locked.value,
+          }}
+          onSend={() => void send()}
+          onSwitchAgent={(id: string) => requestSwitchAgent(id)}
+          onConfirmSwitch={() => void confirmSwitchAgent()}
+          onCancelSwitch={() => cancelSwitchAgent()}
+          onInspectPrompt={() => inspectPrompt()}
+        />
+        {pageToolsRef.value ? (
+          <DebugPage
+            pageTools={pageToolsRef.value}
+            active={activeTab.value === 'debug'}
+            locked={locked.value}
+            onHandoff={(run: DebugRun) => {
+              void handleHandoff(run);
+            }}
+          />
+        ) : null}
+        <RelayPage
+          active={activeTab.value === 'relay'}
+          invokeLogs={relayStore.invokeLogs.value}
+          runningCount={relayStore.runningCount.value}
+          terminated={relayStore.terminated.value}
+        />
+        <DataSourcePage
+          active={activeTab.value === 'datasource'}
+          statuses={relayStore.statuses.value}
+          selection={relayStore.selection.value}
+          locked={locked.value}
+          relayStatus={relayStatusClient}
+        />
+        <A2aPage
+          active={activeTab.value === 'a2a'}
+          refs={a2aConfig.value}
+          a2aTokens={a2aTokens}
+          busy={locked.value}
+          saving={a2aSaving.value}
+          testConnection={handleTestA2aConnection}
+          notice={a2aNotice.value}
+          onSave={(refs: AgentA2aRef[], tokens: Record<string, string>) =>
+            void handleSaveA2aConfig(refs, tokens)}
+        />
+        <SettingsPage
+          active={activeTab.value === 'settings'}
+          settings={settings}
+          busy={locked.value}
           // 表单编辑只落 SettingsForm 本地草稿（编辑态/只读态拆分）：保存时草稿合并进
           // 基线 reactive 对象，再走既有 persistSettings 落盘 + setTab('chat') 流程
-          onSave: (draft: PanelSettings) => {
+          onSave={(draft: PanelSettings) => {
             Object.assign(settings, draft);
             void persistSettings();
-          },
-        }),
-      ]);
+          }}
+        />
+      </div>
+    );
   },
 });

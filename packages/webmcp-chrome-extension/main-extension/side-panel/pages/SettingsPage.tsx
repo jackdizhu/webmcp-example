@@ -4,9 +4,10 @@
 // - edit → SettingsForm 草稿表单（保存/取消在表单内，保存成功回查看态）
 // mode 跨页签切换保留；dirty 沿用「仅提示不阻断」口径（Form 内提示，不阻断切页签）。
 // 本页负责把 Form 的 save(草稿) / dirty 上抛给 App。
-// 日志区块管理（条数/导出/清空）为操作类非表单，两种模式常驻（2026-09-13 决策 ③）。
-// 模板用 h() 渲染函数（MV3 扩展页 CSP 禁止运行时字符串编译，见 issues/001）。
-import { defineComponent, h, ref, watch, type PropType, type VNode } from 'vue';
+// 日志区块管理（条数/导出/清空）为操作类非表单（2026-09-13 决策 ③）。
+// 模板用 TSX：构建期经 oxc 转译为 vue/jsx-runtime 函数调用，运行时零 eval，
+// 与 MV3 扩展页 CSP 兼容（见 issues/001）。
+import { defineComponent, ref, watch, type PropType } from 'vue';
 import { t } from '../i18n';
 import { SubPageFrame } from '../components/SubPageFrame';
 import type { PanelSettings } from '../runtime/panel-client';
@@ -98,78 +99,82 @@ export const SettingsPage = defineComponent({
     const formDirty = ref(false);
 
     // S2 日志区降级为页脚折叠 <details>（默认收起，summary 行显示标题 + 条数）
-    const renderLogs = (): (VNode | null)[] => [
-      h('details', { class: 'settings-logs-fold' }, [
-        h('summary', [
-          h('span', t('settings.logsTitle')),
-          h(
-            'span',
-            { class: 'settings-log-count' },
-            logCountValue.value !== null ? t('settings.logsCount', { count: logCountValue.value }) : ''
-          ),
-        ]),
-        h('div', { class: 'settings-logs' }, [
-          h('button', { class: 'ghost', type: 'button', onClick: () => void handleExportLogs() }, t('settings.exportLogs')),
-          h('button', {
-            class: confirmClear.value ? 'ghost danger-ghost danger-ghost-armed' : 'ghost danger-ghost',
-            type: 'button',
-            onClick: handleClearLogsClick,
-          }, confirmClear.value ? t('settings.confirmClearLogs') : t('settings.clearLogs')),
-        ]),
-        logHint.value ? h('p', { class: 'settings-hint' }, logHint.value) : null,
-      ]),
-    ];
+    const renderLogs = () => (
+      <details class="settings-logs-fold">
+        <summary>
+          <span>{t('settings.logsTitle')}</span>
+          <span class="settings-log-count">
+            {logCountValue.value !== null ? t('settings.logsCount', { count: logCountValue.value }) : ''}
+          </span>
+        </summary>
+        <div class="settings-logs">
+          <button class="ghost" type="button" onClick={() => void handleExportLogs()}>
+            {t('settings.exportLogs')}
+          </button>
+          <button
+            class={confirmClear.value ? 'ghost danger-ghost danger-ghost-armed' : 'ghost danger-ghost'}
+            type="button"
+            onClick={handleClearLogsClick}
+          >
+            {confirmClear.value ? t('settings.confirmClearLogs') : t('settings.clearLogs')}
+          </button>
+        </div>
+        {logHint.value ? <p class="settings-hint">{logHint.value}</p> : null}
+      </details>
+    );
 
-    return () => {
-      // 编辑态 = 独立子页面（SubPageFrame：返回 icon + 标题栏，返回/取消回只读列表页）；
-      // 日志区块属查看态信息（2026-09-13 页面拆分改造：不再两种模式常驻）
-      const body: (VNode | null)[] =
-        mode.value === 'view'
-          ? [
-              // S7 摘要卡片化：「编辑配置」移入卡片标题行右侧（slot actions），省一整行孤悬按钮
-              h(SettingsSummary, { settings: props.settings, dirty: formDirty.value }, {
-                actions: () => [
-                  h('button', {
-                    type: 'button',
-                    disabled: props.busy,
-                    onClick: () => {
+    return () => (
+      // 编辑态 = 独立子页面（SubPageFrame：返回 icon + 标题栏，返回/取消回只读列表页）
+      <div class="settings-page" style={{ display: props.active ? '' : 'none' }}>
+        {mode.value === 'view' ? (
+          <>
+            {/* S7 摘要卡片化：「编辑配置」移入卡片标题行右侧（slot actions），省一整行孤悬按钮 */}
+            <SettingsSummary settings={props.settings} dirty={formDirty.value}>
+              {{
+                actions: () => (
+                  <button
+                    type="button"
+                    disabled={props.busy}
+                    onClick={() => {
                       mode.value = 'edit';
-                    },
-                  }, t('settings.editConfig')),
-                ],
-              }),
-              props.busy ? h('p', { class: 'settings-hint' }, t('settings.lockedHint')) : null,
-              ...renderLogs(),
-            ]
-          : [
-              h(SubPageFrame, { title: t('settings.editConfig'), onBack: () => { mode.value = 'view'; } }, {
-                default: () => [
-                  h(SettingsForm, {
-                    settings: props.settings,
-                    editing: mode.value === 'edit',
-                    busy: props.busy,
-                    onSave: (draft: PanelSettings) => {
-                      // 保存成功后回查看态（App 侧 persistSettings 还会切回对话页）
-                      emit('save', draft);
-                      mode.value = 'view';
-                    },
-                    onCancel: () => {
-                      // 取消编辑 = 丢弃草稿（Form 内已对齐基线）+ 退回查看态；
-                      // 语义收敛在页面层，不上抛 App
-                      mode.value = 'view';
-                    },
-                    'onUpdate:dirty': (value: boolean) => {
-                      formDirty.value = value;
-                    },
-                  }),
-                ],
-              }),
-            ];
-      return h(
-        'div',
-        { class: 'settings-page', style: { display: props.active ? '' : 'none' } },
-        body
-      );
-    };
+                    }}
+                  >
+                    {t('settings.editConfig')}
+                  </button>
+                ),
+              }}
+            </SettingsSummary>
+            {props.busy ? <p class="settings-hint">{t('settings.lockedHint')}</p> : null}
+            {renderLogs()}
+          </>
+        ) : (
+          <SubPageFrame
+            title={t('settings.editConfig')}
+            onBack={() => {
+              mode.value = 'view';
+            }}
+          >
+            <SettingsForm
+              settings={props.settings}
+              editing={mode.value === 'edit'}
+              busy={props.busy}
+              onSave={(draft: PanelSettings) => {
+                // 保存成功后回查看态（App 侧 persistSettings 还会切回对话页）
+                emit('save', draft);
+                mode.value = 'view';
+              }}
+              onCancel={() => {
+                // 取消编辑 = 丢弃草稿（Form 内已对齐基线）+ 退回查看态；
+                // 语义收敛在页面层，不上抛 App
+                mode.value = 'view';
+              }}
+              onUpdate:dirty={(value: boolean) => {
+                formDirty.value = value;
+              }}
+            />
+          </SubPageFrame>
+        )}
+      </div>
+    );
   },
 });

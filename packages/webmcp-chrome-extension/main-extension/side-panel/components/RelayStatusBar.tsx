@@ -1,8 +1,9 @@
 // relay 连接状态栏：摘要行 + 可展开的逐标签页明细。
-// 独立可复用组件放 components/（分层约定）；模板必须用 h() 渲染函数
-// （MV3 扩展页 CSP 禁止运行时字符串编译，见 issues/001）。
+// 独立可复用组件放 components/（分层约定）。
+// 模板用 TSX：构建期经 oxc 转译为 vue/jsx-runtime 函数调用，运行时零 eval，
+// 与 MV3 扩展页 CSP 兼容（见 issues/001）。
 // 文案经全局 i18n store（t() 直读 locale ref），切换语言自动重渲染。
-import { defineComponent, h, ref } from 'vue';
+import { defineComponent, ref } from 'vue';
 import type { RelayTabStatus } from '../../../core/relay-status-protocol';
 import { t } from '../i18n';
 import type { MessageKey } from '../i18n/zh-CN';
@@ -52,56 +53,46 @@ export const RelayStatusBar = defineComponent({
     return () => {
       const summary = summarize(props.statuses);
       const children = [
-        h(
-          'button',
-          {
-            class: 'relay-summary',
-            type: 'button',
-            onClick: () => {
-              expanded.value = !expanded.value;
-            },
-          },
-          [
-            h('span', { class: ['relay-dot', summary.cls] }),
-            h('span', { class: 'relay-summary-text' }, summary.text),
-            h('span', { class: 'relay-caret' }, expanded.value ? '▾' : '▸'),
-          ]
-        ),
+        <button
+          class="relay-summary"
+          type="button"
+          onClick={() => {
+            expanded.value = !expanded.value;
+          }}
+        >
+          <span class={['relay-dot', summary.cls]} />
+          <span class="relay-summary-text">{summary.text}</span>
+          <span class="relay-caret">{expanded.value ? '▾' : '▸'}</span>
+        </button>,
       ];
 
       if (expanded.value && props.statuses.length > 0) {
         children.push(
-          h(
-            'ul',
-            { class: 'relay-list' },
-            props.statuses.map((status) =>
-              h('li', { class: 'relay-item', key: String(status.tabId) }, [
-                h('div', { class: 'relay-item-head' }, [
-                  h(
-                    'span',
-                    { class: 'relay-item-title' },
-                    status.title || status.url || t('common.tabLabel', { id: status.tabId })
-                  ),
-                  h(
-                    'span',
-                    { class: ['relay-badge', `relay-badge-${status.state}`] },
-                    (() => {
+          <ul class="relay-list">
+            {props.statuses.map((status) => (
+              <li class="relay-item" key={String(status.tabId)}>
+                <div class="relay-item-head">
+                  <span class="relay-item-title">
+                    {status.title || status.url || t('common.tabLabel', { id: status.tabId })}
+                  </span>
+                  <span class={['relay-badge', `relay-badge-${status.state}`]}>
+                    {(() => {
                       const key = STATE_KEY[status.state];
                       return key !== undefined ? t(key) : status.state;
-                    })()
-                  ),
-                ]),
-                h('div', { class: 'relay-item-meta' }, [
-                  `${formatEndpoint(status)} · ${t('common.toolsCount', { count: status.toolsCount })}`,
-                  status.detail ? ` · ${status.detail}` : '',
-                ]),
-              ])
-            )
-          )
+                    })()}
+                  </span>
+                </div>
+                <div class="relay-item-meta">
+                  {`${formatEndpoint(status)} · ${t('common.toolsCount', { count: status.toolsCount })}`}
+                  {status.detail ? ` · ${status.detail}` : ''}
+                </div>
+              </li>
+            ))}
+          </ul>
         );
       }
 
-      return h('div', { class: 'relay-bar' }, children);
+      return <div class="relay-bar">{children}</div>;
     };
   },
 });

@@ -4,8 +4,9 @@
 // 保存范式与设置页一致：本页持**本地草稿**（refs + tokens），行级操作只改草稿，
 // 点「保存」才整批落盘（App handleSaveA2aConfig）并触发工具清单重建。
 // 区块本体复用 components/A2aAgentsSection。
-// 模板用 h() 渲染函数（MV3 扩展页 CSP 禁止运行时字符串编译，见 issues/001）。
-import { computed, defineComponent, h, ref, watch, type PropType } from 'vue';
+// 模板用 TSX：构建期经 oxc 转译为 vue/jsx-runtime 函数调用，运行时零 eval，
+// 与 MV3 扩展页 CSP 兼容（见 issues/001）。
+import { computed, defineComponent, ref, watch, type PropType } from 'vue';
 import type { AgentA2aRef } from 'webmcp-agent-chat-core';
 import { A2aAgentsSection } from '../components/A2aAgentsSection';
 
@@ -85,20 +86,21 @@ export const A2aPage = defineComponent({
       emit('save', draftRefs.value.map((item) => ({ ...item })), { ...draftTokens.value });
     };
 
-    return () =>
-      h('div', { class: 'a2a-page', style: { display: props.active ? '' : 'none' } }, [
-        h(A2aAgentsSection, {
-          refs: draftRefs.value,
-          a2aTokens: draftTokens.value,
-          busy: props.busy,
-          saving: props.saving,
-          dirty: dirty.value,
-          testConnection: props.testConnection,
-          notice: props.notice,
-          onCommitRef: (refItem: AgentA2aRef, token: string) => handleCommitRef(refItem, token),
-          onRemoveRef: (id: string) => handleRemoveRef(id),
-          onSave: () => handleSave(),
-        }),
-      ]);
+    return () => (
+      <div class="a2a-page" style={{ display: props.active ? '' : 'none' }}>
+        <A2aAgentsSection
+          refs={draftRefs.value}
+          a2aTokens={draftTokens.value}
+          busy={props.busy}
+          saving={props.saving}
+          dirty={dirty.value}
+          testConnection={props.testConnection}
+          notice={props.notice}
+          onCommitRef={(refItem: AgentA2aRef, token: string) => handleCommitRef(refItem, token)}
+          onRemoveRef={(id: string) => handleRemoveRef(id)}
+          onSave={() => handleSave()}
+        />
+      </div>
+    );
   },
 });

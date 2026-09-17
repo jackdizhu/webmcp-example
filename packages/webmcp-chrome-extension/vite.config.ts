@@ -1,5 +1,4 @@
 import { cpSync } from 'node:fs';
-import vue from '@vitejs/plugin-vue';
 import { defineConfig } from 'vite-plus';
 import type { PackUserConfig } from 'vite-plus/pack';
 
@@ -29,16 +28,14 @@ const extensionBase: PackUserConfig = {
   clean: false,
 };
 
-// Vue 侧边栏组专用配置：组件模板全部用 h() 渲染函数（构建期生成，无 eval）。
+// Vue 侧边栏组专用配置：组件模板用 TSX（oxc 构建期转译为 vue/jsx-runtime 的 jsx()
+// 函数调用——oxc 转换按文件就近解析 tsconfig，jsx / jsxImportSource 配置在
+// tsconfig.base.json，运行时零 eval，与 MV3 CSP 兼容）。
 // 禁止改回运行时字符串编译（vue.esm-bundler 的 new Function）——MV3 扩展页 CSP
 // 为 script-src 'self'，eval 类调用会直接 EvalError 导致侧栏白屏。
 // 旗标保留：缺失会在产物里残留未定义的全局标识符，IIFE 下直接 ReferenceError。
-//
-// SFC 试点（实验 docs/sfc-plugin-experiment-plan.md）：plugin-vue 在构建期把 .vue
-// 编译为渲染函数，运行时零 eval，与 CSP 兼容；试点组件禁止携带 <style> 块。
 const sidePanelBase: PackUserConfig = {
   ...extensionBase,
-  plugins: [vue()],
   define: {
     __VUE_OPTIONS_API__: 'true',
     __VUE_PROD_DEVTOOLS__: 'false',
