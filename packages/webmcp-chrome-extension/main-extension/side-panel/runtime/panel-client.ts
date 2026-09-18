@@ -140,6 +140,10 @@ export function attachInjectedTools(
   systemPrompt: string;
   /** 每轮发送给 LLM 的历史对话轮数上限（0 = 不裁剪）；默认 5。 */
   maxHistoryTurns: number;
+  /** 会话历史保留上限（保存路径按 updatedAt 淘汰超限旧会话）；默认 32。 */
+  sessionRetentionLimit: number;
+  /** 侧栏打开时加载/展示的最近会话条数（≤ sessionRetentionLimit，读取时归一化）；默认 8。 */
+  sessionLoadLimit: number;
 }
 
 export const DEFAULT_SETTINGS: PanelSettings = {
@@ -153,6 +157,8 @@ export const DEFAULT_SETTINGS: PanelSettings = {
   consoleOutput: false,
   systemPrompt: DEFAULT_SYSTEM_PROMPT,
   maxHistoryTurns: 5,
+  sessionRetentionLimit: 32,
+  sessionLoadLimit: 8,
 };
 
 const SETTINGS_KEYS = [
@@ -166,6 +172,8 @@ const SETTINGS_KEYS = [
   'consoleOutput',
   'llmSystemPrompt',
   'agentMaxHistoryTurns',
+  'sessionRetentionLimit',
+  'sessionLoadLimit',
 ] as const;
 
 /**
@@ -202,6 +210,18 @@ export async function loadSettings(storage: {
   get: typeof chrome.storage.local.get;
 } = chrome.storage.local): Promise<PanelSettings> {
   const stored = await storage.get([...SETTINGS_KEYS]);
+  const sessionRetentionLimit =
+    typeof stored['sessionRetentionLimit'] === 'number' &&
+    Number.isInteger(stored['sessionRetentionLimit']) &&
+    stored['sessionRetentionLimit'] > 0
+      ? stored['sessionRetentionLimit']
+      : DEFAULT_SETTINGS.sessionRetentionLimit;
+  const sessionLoadLimitRaw =
+    typeof stored['sessionLoadLimit'] === 'number' &&
+    Number.isInteger(stored['sessionLoadLimit']) &&
+    stored['sessionLoadLimit'] > 0
+      ? stored['sessionLoadLimit']
+      : DEFAULT_SETTINGS.sessionLoadLimit;
   return {
     apiKey: typeof stored['llmApiKey'] === 'string' ? stored['llmApiKey'] : DEFAULT_SETTINGS.apiKey,
     baseUrl: typeof stored['llmBaseUrl'] === 'string' ? stored['llmBaseUrl'] : DEFAULT_SETTINGS.baseUrl,
@@ -222,6 +242,9 @@ export async function loadSettings(storage: {
       typeof stored['agentMaxHistoryTurns'] === 'number' && Number.isInteger(stored['agentMaxHistoryTurns'])
         ? stored['agentMaxHistoryTurns']
         : DEFAULT_SETTINGS.maxHistoryTurns,
+    sessionRetentionLimit,
+    // 加载条数不得超过保留上限（表单侧 hint 引导，读取时硬归一化兜底）
+    sessionLoadLimit: Math.min(sessionLoadLimitRaw, sessionRetentionLimit),
   };
 }
 
@@ -241,6 +264,8 @@ export async function saveSettings(
     consoleOutput: settings.consoleOutput,
     llmSystemPrompt: settings.systemPrompt,
     agentMaxHistoryTurns: settings.maxHistoryTurns,
+    sessionRetentionLimit: settings.sessionRetentionLimit,
+    sessionLoadLimit: settings.sessionLoadLimit,
   });
 }
 
@@ -263,6 +288,8 @@ export function toPanelSettings(settings: PanelSettings): PanelSettings {
     consoleOutput: settings.consoleOutput,
     systemPrompt: settings.systemPrompt,
     maxHistoryTurns: settings.maxHistoryTurns,
+    sessionRetentionLimit: settings.sessionRetentionLimit,
+    sessionLoadLimit: settings.sessionLoadLimit,
   };
 }
 

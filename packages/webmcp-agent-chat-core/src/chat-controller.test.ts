@@ -186,6 +186,49 @@ describe('createChatController', () => {
     expect(controller.getHistory()).toHaveLength(0);
   });
 
+  it('setHistory 恢复跨轮历史（浅拷贝防外部突变，恢复后 runTurn 以本轮 user 收尾续接）', async () => {
+    const seenMessages: ChatMessage[][] = [];
+    const { deps } = makeDeps();
+    const controller = createChatController({
+      ...deps,
+      createLlm: () => ({
+        async complete(messages) {
+          seenMessages.push([...messages]);
+          return { role: 'assistant', content: '续接回复' };
+        },
+      }),
+    });
+    const restored: ChatMessage[] = [
+      { role: 'user', content: '旧会话问题' },
+      { role: 'assistant', content: '旧会话回答' },
+    ];
+
+    controller.setHistory(restored);
+    // 外部数组后续突变不影响已恢复的历史（浅拷贝落库）
+    restored.length = 0;
+    expect(controller.getHistory()).toHaveLength(2);
+
+    await controller.runTurn('新问题');
+
+    // 请求 = system + 恢复的历史（2 条）+ 本轮 user
+    const call = seenMessages[0] ?? [];
+    expect(call.some((m) => m.role === 'system')).toBe(true);
+    expect(call[1]).toEqual({ role: 'user', content: '旧会话问题' });
+    expect(call[2]).toEqual({ role: 'assistant', content: '旧会话回答' });
+    expect(call[call.length - 1]).toEqual({ role: 'user', content: '新问题' });
+    // 恢复的历史并入 transcript，跨轮延续
+    expect(controller.getHistory().some((m) => m.content === '旧会话问题')).toBe(true);
+  });
+
+  it('setHistory 空数组等价 clearHistory', async () => {
+    const { deps } = makeDeps();
+    const controller = createChatController(deps);
+
+    await controller.runTurn('第一轮');
+    controller.setHistory([]);
+    expect(controller.getHistory()).toHaveLength(0);
+  });
+
   it('日志事件：turn_start / turn_end 均经 onLog 注入', async () => {
     const { deps, logs } = makeDeps({}, [{ role: 'assistant', content: 'done' }]);
     const controller = createChatController(deps);

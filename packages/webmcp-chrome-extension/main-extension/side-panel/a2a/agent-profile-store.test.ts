@@ -42,12 +42,12 @@ beforeEach(() => {
 });
 
 describe('createAgentProfileStore', () => {
-  it('首次加载（存储为空）：迁移出内置三智能体并落盘，默认激活「单个tools调试」', async () => {
+  it('首次加载（存储为空）：迁移出内置三智能体并落盘，默认激活「通用智能体」', async () => {
     const store = createAgentProfileStore(storage.stub);
     await store.load('旧系统提示词');
     expect(store.agents.value.map((item) => item.id)).toEqual(['tool-debug', 'multi-turn-loop', 'a2a-analyst']);
     expect(store.activeAgentId.value).toBe(DEFAULT_ACTIVE_AGENT_ID);
-    expect(store.activeAgent.value?.name).toBe('单个tools调试');
+    expect(store.activeAgent.value?.name).toBe('通用智能体');
     expect(storage.writes).toHaveLength(1);
     expect(storage.writes[0]![AGENT_PROFILES_STORAGE_KEY]).toMatchObject({ activeAgentId: DEFAULT_ACTIVE_AGENT_ID });
   });
@@ -68,7 +68,9 @@ describe('createAgentProfileStore', () => {
     const store = createAgentProfileStore(storage.stub);
     await store.load('旧提示');
     expect(store.agents.value).toHaveLength(3);
-    expect(store.agents.value[0]!.id).toBe(DEFAULT_ACTIVE_AGENT_ID);
+    // 出厂状态：首个条目仍是 tool-debug，默认激活的是通用智能体（a2a-analyst）
+    expect(store.agents.value[0]!.id).toBe('tool-debug');
+    expect(store.activeAgentId.value).toBe(DEFAULT_ACTIVE_AGENT_ID);
     // 第一次写入 = 脏数据备份，第二次写入 = 重建后的出厂状态
     expect(storage.writes).toHaveLength(2);
     expect(storage.writes[0]![AGENT_PROFILES_CORRUPT_KEY]).toMatchObject({ value: { agents: 'not-an-array' } });

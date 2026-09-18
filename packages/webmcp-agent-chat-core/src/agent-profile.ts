@@ -72,16 +72,17 @@ export interface ProfileStore {
 /** 旧版迁移产物智能体 ID（升级路径的识别标记，新状态不再使用）。 */
 export const LEGACY_DEFAULT_AGENT_ID = 'default';
 
-/** 内置默认激活的智能体 ID（用户要求：默认「单个tools调试」）。 */
-export const DEFAULT_ACTIVE_AGENT_ID = 'tool-debug';
+/** 内置默认激活的智能体 ID（2026-09-18 用户要求：改名「通用智能体」并设为默认选中）。 */
+export const DEFAULT_ACTIVE_AGENT_ID = 'a2a-analyst';
 
 /**
  * 内置智能体档案（工厂函数：每次返回全新深拷贝，避免调用方共享可变引用）。
  *
  * - 「单个tools调试」：不继承全局提示词，自带单工具约束 —— 每轮最多调用一个工具，
- *   快速验证单个工具行为（默认激活）；
+ *   快速验证单个工具行为；
  * - 「多轮循环智能体」：继承全局提示词（= 原完整多轮 tool-use 循环行为），零附加规则；
- * - 「A2A智能体」：数据查询/收集用页面与内置工具完成，分析环节优先调用 a2a__* 远程智能体。
+ * - 「通用智能体」（id: a2a-analyst，原名 A2A智能体）：数据查询/收集用页面与内置工具完成，
+ *   分析环节优先调用 a2a__* 远程智能体（默认激活）。
  */
 export function createBuiltinAgentProfiles(): AgentProfile[] {
   return [
@@ -129,7 +130,7 @@ export function createBuiltinAgentProfiles(): AgentProfile[] {
     },
     {
       id: 'a2a-analyst',
-      name: 'A2A智能体',
+      name: '通用智能体',
       description: '数据查询收集用页面工具完成，分析环节优先调用 a2a__ 远程智能体能力',
       rules: {
         inheritGlobal: true,
@@ -154,7 +155,7 @@ export function createBuiltinAgentProfiles(): AgentProfile[] {
   ];
 }
 
-/** 内置状态的全新拷贝（激活 = 单个tools调试）。 */
+/** 内置状态的全新拷贝（激活 = 通用智能体）。 */
 function createBuiltinState(): AgentProfilesState {
   return { agents: createBuiltinAgentProfiles(), activeAgentId: DEFAULT_ACTIVE_AGENT_ID };
 }

@@ -69,6 +69,11 @@ export interface ChatController {
   getHistory(): readonly ChatMessage[];
   /** 清空历史（切换智能体开新会话等场景）。 */
   clearHistory(): void;
+  /**
+   * 恢复跨轮历史（会话恢复场景；宿主持久化层负责快照的合法性与版本兼容，
+   * 本方法只做浅拷贝落库，防外部数组后续突变）。
+   */
+  setHistory(messages: readonly ChatMessage[]): void;
   /** 运行一轮对话。跨域执行锁（如 relay 调用进行中）由宿主在调用前自行处理。 */
   runTurn(userText: string): Promise<void>;
 }
@@ -141,6 +146,10 @@ export function createChatController(deps: ChatControllerDeps): ChatController {
 
     clearHistory() {
       history = [];
+    },
+
+    setHistory(messages) {
+      history = [...messages];
     },
 
     async runTurn(userText: string): Promise<void> {

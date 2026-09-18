@@ -44,9 +44,6 @@ export const zhCN = {
 
   // ---- 对话页 ----
   'chat.agentLabel': '智能体',
-  'chat.inspectPrompt': '查看提示词',
-  'chat.switchConfirm': '切换到「{name}」将开启新会话，当前对话历史将被清空。',
-  'chat.switchConfirmYes': '确认切换',
   'chat.pending': 'agent 处理中…',
   'chat.tracePending': '执行中…',
   'chat.traceCollapse': '收起 ▲',
@@ -57,12 +54,20 @@ export const zhCN = {
   'chat.emptyExample': '例如："列出页面工具，并逐个调用验证返回"。',
   'chat.composerPlaceholder': '例如：列出页面工具并调用 get_status 验证返回',
   'chat.send': '发送',
+  'chat.newSession': '新会话',
+  'chat.recentSessions': '最近会话',
+  'chat.sessionMeta': '{agent} · {count} 条消息 · {time}',
+  'chat.sessionEmpty': '暂无历史会话',
+  'chat.timeJustNow': '刚刚',
+  'chat.timeMinutesAgo': '{n} 分钟前',
+  'chat.timeHoursAgo': '{n} 小时前',
+  'chat.timeDaysAgo': '{n} 天前',
 
   // ---- App 层动态消息（pushUiMessage / notifyA2a）----
   'msg.missingApiKey': '请先在「设置」页填写 API Key 后再开始对话。',
   'msg.agentSwitched': '已切换到「{name}」，已开启新会话。',
-  'msg.promptHeader': '当前系统提示词（分层组装，含段来源标注）：\n\n{prompt}',
-  'msg.promptEmpty': '当前系统提示词为空，将使用内置默认提示词。',
+  'msg.newSessionStarted': '已开启新会话，当前对话已归档到历史。',
+  'msg.sessionRestored': '已恢复会话「{title}」，对话上下文已还原。',
   'msg.settingsSaved': '设置已保存。',
   'msg.settingsSavedConsole':
     '设置已保存。控制台输出已开启：在侧边栏上右键 →「检查」打开控制台，用过滤框输入 traceId 可筛出该轮完整链路。',
@@ -96,6 +101,7 @@ export const zhCN = {
 
   // ---- relay 调用页 ----
   'relayPage.title': 'relay 调用日志（只读）',
+  'relayPage.connection': '连接状态',
   'relayPage.running': '{count} 个调用执行中…',
   'relayPage.terminated': '已终止等待，执行锁已解除；后台调用仍会完成并记录在下方日志中。',
   'relayPage.empty':
@@ -141,6 +147,8 @@ export const zhCN = {
   'settings.summary.protocol': 'API 协议',
   'settings.summary.model': '模型',
   'settings.summary.maxHistoryTurns': '历史轮数上限',
+  'settings.summary.sessionRetentionLimit': '会话历史上限',
+  'settings.summary.sessionLoadLimit': '会话历史展示条数',
   'settings.summary.consoleOutput': '控制台输出',
   'settings.summary.on': '开启',
   'settings.summary.off': '关闭',
@@ -162,6 +170,12 @@ export const zhCN = {
   'settings.form.maxHistoryTurns': '历史对话轮数上限',
   'settings.form.maxHistoryTurnsHint':
     '每轮发送给 LLM 的历史对话轮数上限（默认 5，0 = 不裁剪）。裁剪以轮为单位，工具执行结果随所属轮一并裁剪，可显著降低 token 消耗。',
+  'settings.form.sessionRetentionLimit': '会话历史上限',
+  'settings.form.sessionRetentionLimitHint':
+    '本地保留的会话历史条数上限（默认 32）；超出后按最近活跃时间淘汰最旧会话。',
+  'settings.form.sessionLoadLimit': '会话历史展示条数',
+  'settings.form.sessionLoadLimitHint':
+    '打开侧边栏时展示的最近会话条数（默认 8），不能超过会话历史上限。',
   'settings.form.consoleOutput': '控制台输出（开启后日志同步打印到控制台，带 [traceId] 前缀；默认仅写本地日志）',
   'settings.form.apiPathHint':
     '请求路径，拼接在 Base URL 之后；清空后不回退默认路径，发起对话会提示：请配置apiPath。Anthropic 默认 /v1/messages，OpenAI 兼容默认 /chat/completions。',

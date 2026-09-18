@@ -123,13 +123,13 @@ describe('mergeLlmConfig', () => {
 });
 
 describe('createBuiltinAgentProfiles', () => {
-  it('内置三智能体：单个tools调试（默认激活）+ 多轮循环智能体 + A2A智能体', () => {
+  it('内置三智能体：单个tools调试 + 多轮循环智能体 + 通用智能体（默认激活）', () => {
     const profiles = createBuiltinAgentProfiles();
     expect(profiles.map((item) => item.id)).toEqual(['tool-debug', 'multi-turn-loop', 'a2a-analyst']);
-    expect(profiles.map((item) => item.name)).toEqual(['单个tools调试', '多轮循环智能体', 'A2A智能体']);
+    expect(profiles.map((item) => item.name)).toEqual(['单个tools调试', '多轮循环智能体', '通用智能体']);
   });
 
-  it('A2A智能体：继承全局且规则要求分析优先调用 a2a__ 工具', () => {
+  it('通用智能体（a2a-analyst，原名 A2A智能体）：继承全局且规则要求分析优先调用 a2a__ 工具', () => {
     const a2aAgent = createBuiltinAgentProfiles().find((item) => item.id === 'a2a-analyst');
     expect(a2aAgent).toBeDefined();
     expect(a2aAgent!.rules.inheritGlobal).toBe(true);
@@ -159,7 +159,7 @@ describe('createBuiltinAgentProfiles', () => {
 });
 
 describe('migrateLegacySettings', () => {
-  it('existing 为空时创建内置三智能体，默认激活「单个tools调试」', () => {
+  it('existing 为空时创建内置三智能体，默认激活「通用智能体」', () => {
     const state = migrateLegacySettings({ systemPrompt: '旧提示' }, null);
     expect(state.agents).toHaveLength(3);
     expect(state.activeAgentId).toBe(DEFAULT_ACTIVE_AGENT_ID);
@@ -229,6 +229,31 @@ describe('migrateLegacySettings', () => {
     expect(state.agents.map((item) => item.id)).toEqual(['tool-debug', 'multi-turn-loop', 'a2a-analyst']);
     expect(JSON.stringify(state.agents[0])).toBe(JSON.stringify(toolDebugOnly));
     expect(state.activeAgentId).toBe('tool-debug');
+  });
+
+  it('内置条目改名自动下发：存量「A2A智能体」条目原位刷新为「通用智能体」（激活保留用户选择）', () => {
+    const [toolDebug] = createBuiltinAgentProfiles();
+    const existing: AgentProfilesState = {
+      agents: [
+        { ...toolDebug! },
+        {
+          id: 'a2a-analyst',
+          name: 'A2A智能体',
+          description: '数据查询收集用页面工具完成，分析环节优先调用 a2a__ 远程智能体能力',
+          rules: { inheritGlobal: true, items: [] },
+          skills: [],
+          mcps: [],
+        },
+      ],
+      activeAgentId: 'a2a-analyst',
+    };
+    const state = migrateLegacySettings({ systemPrompt: '' }, existing);
+    const renamed = state.agents.find((item) => item.id === 'a2a-analyst');
+    expect(renamed!.name).toBe('通用智能体');
+    // 内置条目过时时原位刷新为最新托管定义（rules 补齐 a2a-first-analysis）
+    expect(renamed!.rules.items.map((item) => item.id)).toEqual(['a2a-first-analysis']);
+    // activeAgentId 原样保留：改名/刷新不改写用户当前选择
+    expect(state.activeAgentId).toBe('a2a-analyst');
   });
 
   it('幂等：缺失内置条目补齐后再迁移原样返回（引用恒等）', () => {

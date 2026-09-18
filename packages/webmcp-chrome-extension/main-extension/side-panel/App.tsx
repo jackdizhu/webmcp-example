@@ -50,8 +50,13 @@ import {
 } from './runtime/panel-client';
 import { connectRelayStatus, type RelayStatusClient } from './relay/relay-status-client';
 import { createRelayStatusStore } from './relay/relay-status-store';
+import {
+  createSessionId,
+  deriveSessionTitle,
+  type StoredChatSession,
+} from './sessions/session-core';
+import { initSessionStore, loadRecentSessions, saveSession } from './sessions/session-store';
 import { AppHeader } from './components/AppHeader';
-import { RelayStatusBar } from './components/RelayStatusBar';
 import { TabBar, type PanelPage } from './components/TabBar';
 import { TOOL_PENDING_TEXT, type UiMessage } from './components/types';
 import { ChatPage } from './pages/ChatPage';
@@ -80,6 +85,8 @@ export const App = defineComponent({
       consoleOutput: false,
       systemPrompt: '',
       maxHistoryTurns: 0,
+      sessionRetentionLimit: 32,
+      sessionLoadLimit: 8,
     });
     /** 顶部页面路由：agent 对话 / tools 调试 / relay 调用 / 数据源设置 / 设置。 */
     const activeTab = ref<PanelPage>('chat');
@@ -97,8 +104,6 @@ export const App = defineComponent({
 
     // ---- 智能体档案 store（P1，D5/C8：领域逻辑在 core，宿主仅做 chrome.storage 适配）----
     const profileStore = createAgentProfileStore();
-    /** 待确认切换的智能体 ID（空串 = 无待确认；确认条在 ChatPage 渲染）。 */
-    const pendingSwitchAgentId = ref('');
 
     // ---- 技能渐进加载（P2，D5/C8：解析编排与结果包装在 core，宿主只提供读取实现与缝注入）----
     const skillResolver = createSkillResolver(createHostSkillSource());
@@ -208,6 +213,92 @@ export const App = defineComponent({
       if (relayStore.runningCount.value > 0) return t('phase.relay');
       return '';
     });
+
+    // ---- 会话历史（多会话方案，见 docs/side-panel-chat-sessions-design.md）----
+    // 持久化收口 sessions/（IndexedDB 三件套）；本层只编排：归档 / 新建 / 恢复 / 自动保存。
+    // 铁律（D4）：重开侧栏 / 扩展 reload / 浏览器重启 = 全新会话 —— 游标与消息全内存态，
+    // setup 重跑即新游标；onMounted 禁止默认恢复任何历史会话（恢复仅由用户点击列表触发）。
+    /** 当前会话 ID（侧栏打开 = 新会话，D4：空态展示最近会话列表）。 */
+    const activeSessionId = ref(createSessionId());
+    /** 当前会话标题（首条用户消息派生，onUserMessage 挂钩）。 */
+    const activeSessionTitle = ref('');
+    /** 当前会话创建时间（快照 createdAt 基准）。 */
+    const activeSessionCreatedAt = ref(Date.now());
+    /** 最近会话快照（打开加载 + 每次保存后刷新；空态列表数据源，已按 loadLimit 截取）。 */
+    const recentSessions = ref<StoredChatSession[]>([]);
+
+    /** 重新加载最近会话列表（条数 = sessionLoadLimit，设置保存后即时生效）。 */
+    const refreshRecentSessions = async (): Promise<void> => {
+      recentSessions.value = await loadRecentSessions(settings.sessionLoadLimit);
+    };
+
+    /** 组装当前会话快照（响应式数据由 saveSession 内部归一化为 plain，见 session-store）。 */
+    const buildCurrentSession = (): StoredChatSession => ({
+      id: activeSessionId.value,
+      title: activeSessionTitle.value,
+      agentId: profileStore.activeAgentId.value,
+      createdAt: activeSessionCreatedAt.value,
+      updatedAt: Date.now(),
+      messages: messages.value,
+      llmHistory: [...chatController.getHistory()],
+    });
+
+    /** 是否存在用户消息（归档守卫：仅有开场提示的会话无归档价值）。 */
+    const hasUserMessage = computed(() => messages.value.some((item) => item.role === 'user'));
+
+    /**
+     * 归档任意会话快照（通用持久化入口）：saveSession 参数化、不绑定全局游标，
+     * 侧栏当前会话与将来 tab-invoked 后台任务会话（runAgentLoop 自持快照）共用，
+     * 并发写入由 session-store 单事务 + IndexedDB 串行调度保证。
+     */
+    const archiveSnapshot = async (session: StoredChatSession): Promise<void> => {
+      await saveSession(session, settings.sessionRetentionLimit);
+      await refreshRecentSessions();
+    };
+
+    /** 归档当前会话（无用户消息跳过）并刷新列表；locked 由各调用方守卫。 */
+    const archiveCurrentSession = async (): Promise<void> => {
+      if (!hasUserMessage.value) return;
+      await archiveSnapshot(buildCurrentSession());
+    };
+
+    /** 重置会话游标（新建/切换智能体共用：新 ID + 清标题 + 重置创建时间）。 */
+    const resetSessionCursor = (): void => {
+      activeSessionId.value = createSessionId();
+      activeSessionTitle.value = '';
+      activeSessionCreatedAt.value = Date.now();
+    };
+
+    /** 新建会话（D1 交互）：归档当前 → 清空上下文与消息 → 新会话游标。 */
+    const newSession = async (): Promise<void> => {
+      if (locked.value) return;
+      await archiveCurrentSession();
+      chatController.clearHistory();
+      messages.value = [];
+      resetSessionCursor();
+      pushUiMessage('assistant', t('msg.newSessionStarted'));
+      logEvent('info', 'chat', 'session_new', { sessionId: activeSessionId.value });
+    };
+
+    /** 恢复历史会话：归档当前 → 回灌 LLM 上下文（D2）与消息快照 → 切回会话智能体（D5）。 */
+    const restoreSession = async (session: StoredChatSession): Promise<void> => {
+      if (locked.value) return;
+      await archiveCurrentSession();
+      chatController.clearHistory();
+      chatController.setHistory(session.llmHistory);
+      // 消息以响应式代理重建（工具痕迹回填依赖响应式，同 pushUiMessage 语义）
+      messages.value = session.messages.map((item) =>
+        reactive<UiMessage>({ ...item, toolTrace: [...item.toolTrace] })
+      );
+      activeSessionId.value = session.id;
+      activeSessionTitle.value = session.title;
+      activeSessionCreatedAt.value = session.createdAt;
+      if (session.agentId.length > 0 && profileStore.activeAgentId.value !== session.agentId) {
+        await profileStore.setActive(session.agentId);
+      }
+      pushUiMessage('assistant', t('msg.sessionRestored', { title: session.title }));
+      logEvent('info', 'chat', 'session_restored', { sessionId: session.id });
+    };
 
     /** 页面路由守卫：执行锁生效期间禁止切换（TabBar 已禁用，此处兜底）。 */
     const setTab = (next: PanelPage): void => {
@@ -325,7 +416,13 @@ export const App = defineComponent({
       // rules 分层组装（P1）+ [skills] L1 清单（P2），领域逻辑在 core；与「查看提示词」共用实现
       getSystemPrompt: () => composedSystemPrompt(),
       getMaxHistoryTurns: () => settings.maxHistoryTurns,
-      onUserMessage: (text) => pushUiMessage('user', text),
+      onUserMessage: (text) => {
+        // 首条用户消息派生会话标题（一旦派生不再覆盖；空标题的会话不参与归档守卫之外的场景）
+        if (activeSessionTitle.value.length === 0) {
+          activeSessionTitle.value = deriveSessionTitle(text);
+        }
+        pushUiMessage('user', text);
+      },
       createTurnView: () => {
         const item = pushUiMessage('assistant', '');
         return {
@@ -352,6 +449,9 @@ export const App = defineComponent({
       },
       onTurnSettled: () => {
         clearCurrentTrace();
+        // 自动归档当前会话：onTurnSettled 先于 busy 翻转且终态文案已回填
+        //（chat-controller finally 时序），此处拿到的 messages 即本轮终态快照
+        void archiveCurrentSession();
       },
       onLog: (level, event, payload) => logEvent(level, 'chat', event, payload),
     });
@@ -382,41 +482,17 @@ export const App = defineComponent({
       }
     };
 
-    // ---- 智能体切换（D4：确认后清空历史开新会话；locked 期间禁止发起）----
-    /** 确认条展示名（由待确认 ID 反查）。 */
-    const pendingSwitchName = computed(
-      () => profileStore.agents.value.find((item) => item.id === pendingSwitchAgentId.value)?.name ?? ''
-    );
-    const requestSwitchAgent = (id: string): void => {
+    // ---- 智能体切换（2026-09-18 布局调整：选择即自动归档当前会话并开新会话，无确认流程）----
+    /** 切换智能体：locked 守卫 → 归档当前会话 → 清空上下文与消息 → 切换 → 新会话游标。 */
+    const switchAgent = async (id: string): Promise<void> => {
       if (locked.value || id.length === 0 || id === profileStore.activeAgentId.value) return;
-      pendingSwitchAgentId.value = id;
-    };
-    const confirmSwitchAgent = async (): Promise<void> => {
-      const id = pendingSwitchAgentId.value;
-      if (id.length === 0 || locked.value) return;
-      // 开新会话：清跨轮历史（controller）+ 清 UI 消息（D4 领域规则在 core，UI 清空属宿主展示层）
+      await archiveCurrentSession();
       chatController.clearHistory();
       messages.value = [];
-      pendingSwitchAgentId.value = '';
       await profileStore.setActive(id);
+      resetSessionCursor();
       pushUiMessage('assistant', t('msg.agentSwitched', { name: profileStore.activeAgent.value?.name ?? id }));
       logEvent('info', 'chat', 'agent_switched', { agentId: id });
-    };
-    const cancelSwitchAgent = (): void => {
-      pendingSwitchAgentId.value = '';
-    };
-
-    /** ChatPage「查看提示词」：把最终组装的系统提示词以消息形式展示（P2 轻量实现，含段来源标注）。 */
-    const inspectPrompt = (): void => {
-      if (locked.value) return;
-      const prompt = composedSystemPrompt();
-      pushUiMessage(
-        'assistant',
-        prompt.length > 0
-          ? t('msg.promptHeader', { prompt })
-          : t('msg.promptEmpty')
-      );
-      logEvent('info', 'chat', 'system_prompt_inspected');
     };
 
     /** 把响应式 settings 收敛为待持久化快照（序列化收口在 panel-client，A5 归位）。 */
@@ -454,6 +530,8 @@ export const App = defineComponent({
       settings.consoleOutput = loaded.consoleOutput;
       settings.systemPrompt = loaded.systemPrompt;
       settings.maxHistoryTurns = loaded.maxHistoryTurns;
+      settings.sessionRetentionLimit = loaded.sessionRetentionLimit;
+      settings.sessionLoadLimit = loaded.sessionLoadLimit;
       setConsoleOutput(loaded.consoleOutput);
       // 调试模式：侧栏打开时默认进入 tools 调试页
       if (settings.debugMode) activeTab.value = 'debug';
@@ -461,6 +539,10 @@ export const App = defineComponent({
       // 智能体档案：读存储 →（缺失/脏数据时按旧版 systemPrompt 幂等迁移）→ 需要时落盘
       // （D5/C8：迁移与校验逻辑在 core，这里只是调用 + 持久化适配）
       await profileStore.load(settings.systemPrompt);
+
+      // 会话库：打开 + 加载最近会话列表（IndexedDB 三件套；失败静默降级为无会话功能）
+      await initSessionStore();
+      await refreshRecentSessions();
 
       // A2A token 快照加载（a2aConfig 加载后由 watch 自动首次 sync）
       const tokens = await loadA2aTokens();
@@ -559,7 +641,7 @@ export const App = defineComponent({
             setTab('settings');
           }}
         />
-        <RelayStatusBar statuses={relayStore.statuses.value} />
+        {/* relay 连接状态已迁入「relay 调用」页签（2026-09-18 布局调整），全局区不再展示 */}
         <TabBar
           activeTab={activeTab.value}
           locked={locked.value}
@@ -577,15 +659,15 @@ export const App = defineComponent({
           modelValue={input.value}
           agents={profileStore.agents.value.map((item) => ({ id: item.id, name: item.name }))}
           activeAgentId={profileStore.activeAgentId.value}
-          pendingSwitchName={pendingSwitchName.value}
+          hasMessages={messages.value.length > 0}
+          recentSessions={recentSessions.value}
           onUpdate:modelValue={(value: string) => {
             input.value = value;
           }}
           onSend={() => void send()}
-          onSwitchAgent={(id: string) => requestSwitchAgent(id)}
-          onConfirmSwitch={() => void confirmSwitchAgent()}
-          onCancelSwitch={() => cancelSwitchAgent()}
-          onInspectPrompt={() => inspectPrompt()}
+          onSwitchAgent={(id: string) => void switchAgent(id)}
+          onNewSession={() => void newSession()}
+          onRestoreSession={(session: StoredChatSession) => void restoreSession(session)}
         />
         {pageToolsRef.value ? (
           <DebugPage
@@ -599,6 +681,7 @@ export const App = defineComponent({
         ) : null}
         <RelayPage
           active={activeTab.value === 'relay'}
+          statuses={relayStore.statuses.value}
           invokeLogs={relayStore.invokeLogs.value}
           runningCount={relayStore.runningCount.value}
           terminated={relayStore.terminated.value}

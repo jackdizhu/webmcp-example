@@ -5,6 +5,7 @@
 // 文案经全局 i18n store（t() 直读 locale ref），切换语言自动重渲染。
 // 注意：types.ts 的 TOOL_PENDING_TEXT 是「待回填」哨兵值（App 按其匹配回填），非展示文案；
 // 展示层统一用 t('chat.tracePending')。
+// 会话列表已迁至 ChatPage 左侧栏（2026-09-18 布局调整），本组件只负责消息窗口本体。
 import { defineComponent, nextTick, ref, watch, type PropType } from 'vue';
 import { t } from '../i18n';
 import { TOOL_PENDING_TEXT, type ToolTraceItem, type UiMessage } from './types';

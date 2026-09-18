@@ -433,7 +433,7 @@ describe('loadSettings / saveSettings', () => {
     expect(invalid.apiProtocol).toBe('openai-compat');
   });
 
-  it('保存后读取往返一致（含新增 apiProtocol / maxTokens）', async () => {
+  it('保存后读取往返一致（含新增 apiProtocol / maxTokens / 会话配置）', async () => {
     const storage = makeStorage();
     await saveSettings(
       {
@@ -447,6 +447,8 @@ describe('loadSettings / saveSettings', () => {
         consoleOutput: true,
         systemPrompt: '自定义提示词',
         maxHistoryTurns: 3,
+        sessionRetentionLimit: 16,
+        sessionLoadLimit: 4,
       },
       storage
     );
@@ -456,6 +458,19 @@ describe('loadSettings / saveSettings', () => {
     expect(settings.maxHistoryTurns).toBe(3);
     expect(settings.apiProtocol).toBe('anthropic');
     expect(settings.maxTokens).toBe(2048);
+    expect(settings.sessionRetentionLimit).toBe(16);
+    expect(settings.sessionLoadLimit).toBe(4);
+  });
+
+  it('会话配置缺省回退默认（32/8）；loadLimit 超过 retentionLimit 时归一化为上限', async () => {
+    const fallback = await loadSettings(makeStorage());
+    expect(fallback.sessionRetentionLimit).toBe(32);
+    expect(fallback.sessionLoadLimit).toBe(8);
+    const clamped = await loadSettings(
+      makeStorage({ sessionRetentionLimit: 10, sessionLoadLimit: 99 })
+    );
+    expect(clamped.sessionRetentionLimit).toBe(10);
+    expect(clamped.sessionLoadLimit).toBe(10);
   });
 });
 

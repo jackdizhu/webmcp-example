@@ -1,12 +1,13 @@
-// relay 调用页（页面功能级）：只读调用链路日志。
-// 数据来源：SW 在 handleInvoke 采集（started/finished），经 relay-status Port 推送；
-// 本页不发起任何调用。数据源选择与连接刷新已拆分至「数据源设置」页
-// （2026-09-12 页面结构调整），本页仅负责调用日志的只读展示。
+// relay 调用页（页面功能级）：连接状态（摘要行 + 可展开明细）+ 只读调用链路日志。
+// 数据来源：连接状态与调用日志均由 SW 经 relay-status Port 推送；本页不发起任何调用。
+// 数据源选择与连接刷新已拆分至「数据源设置」页（2026-09-12 页面结构调整）；
+// 连接状态栏自全局区迁入本页（2026-09-18 布局调整，App 不再渲染全局 RelayStatusBar）。
 // 模板用 TSX：构建期经 oxc 转译为 vue/jsx-runtime 函数调用，运行时零 eval，
 // 与 MV3 扩展页 CSP 兼容（见 issues/001）。
 import { defineComponent, type PropType } from 'vue';
-import type { RelayInvokeLogEntry } from '../../../core/relay-status-protocol';
+import type { RelayInvokeLogEntry, RelayTabStatus } from '../../../core/relay-status-protocol';
 import { t } from '../i18n';
+import { RelayStatusBar } from '../components/RelayStatusBar';
 
 /** 时间戳 → HH:MM:SS 展示。 */
 function formatTime(startedAt: number): string {
@@ -20,6 +21,8 @@ export const RelayPage = defineComponent({
   props: {
     /** 本页是否激活（非激活时仅隐藏布局）。 */
     active: { type: Boolean, required: true },
+    /** 各页签 relay 连接状态（迁入本页的状态栏数据源，与数据源设置页共用 store）。 */
+    statuses: { type: Array as PropType<RelayTabStatus[]>, required: true },
     /** 调用日志（App 层维护的环形缓冲，时间正序；渲染时倒序展示最新在前）。 */
     invokeLogs: { type: Array as PropType<RelayInvokeLogEntry[]>, required: true },
     /** 执行中的调用数（ok 缺省的条目数）。 */
@@ -74,6 +77,11 @@ export const RelayPage = defineComponent({
           {props.terminated && props.runningCount > 0 ? (
             <p class="relay-page-terminated">{t('relayPage.terminated')}</p>
           ) : null}
+        </section>
+        {/* 连接状态（摘要行 + 可展开明细）：自全局状态栏迁入，常驻页签顶部 */}
+        <section class="relay-page-connection">
+          <p class="relay-page-connection-title">{t('relayPage.connection')}</p>
+          <RelayStatusBar statuses={props.statuses} />
         </section>
         {props.invokeLogs.length === 0 ? (
           <p class="relay-page-empty">{t('relayPage.empty')}</p>

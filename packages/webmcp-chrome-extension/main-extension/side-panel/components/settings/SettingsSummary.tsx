@@ -91,6 +91,8 @@ export const SettingsSummary = defineComponent({
           row(t('settings.summary.maxHistoryTurns'), String(props.settings.maxHistoryTurns)),
         ])}
         {group(t('settings.summary.group.behavior'), [
+          row(t('settings.summary.sessionRetentionLimit'), String(props.settings.sessionRetentionLimit)),
+          row(t('settings.summary.sessionLoadLimit'), String(props.settings.sessionLoadLimit)),
           row(
             t('settings.summary.consoleOutput'),
             props.settings.consoleOutput ? t('settings.summary.on') : t('settings.summary.off')

@@ -42,9 +42,6 @@ export const enUS: Record<import('./zh-CN').MessageKey, string> = {
 
   // ---- Chat page ----
   'chat.agentLabel': 'Agent',
-  'chat.inspectPrompt': 'View Prompt',
-  'chat.switchConfirm': 'Switching to "{name}" starts a new session; the current chat history will be cleared.',
-  'chat.switchConfirmYes': 'Confirm Switch',
   'chat.pending': 'Agent is working…',
   'chat.tracePending': 'Running…',
   'chat.traceCollapse': 'Collapse ▲',
@@ -55,12 +52,20 @@ export const enUS: Record<import('./zh-CN').MessageKey, string> = {
   'chat.emptyExample': 'e.g. "List the page tools and call them one by one to verify the responses".',
   'chat.composerPlaceholder': 'e.g. List page tools and call get_status to verify the response',
   'chat.send': 'Send',
+  'chat.newSession': 'New Chat',
+  'chat.recentSessions': 'Recent Chats',
+  'chat.sessionMeta': '{agent} · {count} messages · {time}',
+  'chat.sessionEmpty': 'No chat history yet',
+  'chat.timeJustNow': 'just now',
+  'chat.timeMinutesAgo': '{n} min ago',
+  'chat.timeHoursAgo': '{n} h ago',
+  'chat.timeDaysAgo': '{n} d ago',
 
   // ---- App-level dynamic messages (pushUiMessage / notifyA2a) ----
   'msg.missingApiKey': 'Please fill in the API Key on the "Settings" page before starting a chat.',
   'msg.agentSwitched': 'Switched to "{name}". A new session has started.',
-  'msg.promptHeader': 'Current system prompt (layered composition with section-source annotations):\n\n{prompt}',
-  'msg.promptEmpty': 'The current system prompt is empty; the built-in default prompt will be used.',
+  'msg.newSessionStarted': 'A new session has started; the current conversation has been archived to history.',
+  'msg.sessionRestored': 'Session "{title}" restored; the conversation context has been reloaded.',
   'msg.settingsSaved': 'Settings saved.',
   'msg.settingsSavedConsole':
     'Settings saved. Console output is on: right-click the side panel → "Inspect" to open the console, then type a traceId in the filter box to view the full chain of that turn.',
@@ -94,6 +99,7 @@ export const enUS: Record<import('./zh-CN').MessageKey, string> = {
 
   // ---- Relay page ----
   'relayPage.title': 'Relay Call Log (read-only)',
+  'relayPage.connection': 'Connection Status',
   'relayPage.running': '{count} call(s) running…',
   'relayPage.terminated':
     'Wait terminated and the execution lock has been released; background calls will still finish and be logged below.',
@@ -142,6 +148,8 @@ export const enUS: Record<import('./zh-CN').MessageKey, string> = {
   'settings.summary.protocol': 'API Protocol',
   'settings.summary.model': 'Model',
   'settings.summary.maxHistoryTurns': 'Max History Turns',
+  'settings.summary.sessionRetentionLimit': 'Chat History Limit',
+  'settings.summary.sessionLoadLimit': 'Chat History Shown',
   'settings.summary.consoleOutput': 'Console Output',
   'settings.summary.on': 'On',
   'settings.summary.off': 'Off',
@@ -163,6 +171,12 @@ export const enUS: Record<import('./zh-CN').MessageKey, string> = {
   'settings.form.maxHistoryTurns': 'Max History Turns',
   'settings.form.maxHistoryTurnsHint':
     'Maximum number of history turns sent to the LLM per turn (default 5; 0 = no trimming). Trimming works in whole turns, and tool results are trimmed together with their turn, which can significantly reduce token usage.',
+  'settings.form.sessionRetentionLimit': 'Chat History Limit',
+  'settings.form.sessionRetentionLimitHint':
+    'Maximum number of chat sessions kept locally (default 32); once exceeded, the least recently active session is dropped first.',
+  'settings.form.sessionLoadLimit': 'Chat History Shown',
+  'settings.form.sessionLoadLimitHint':
+    'Number of recent sessions shown when the side panel opens (default 8); cannot exceed the chat history limit.',
   'settings.form.consoleOutput':
     'Console output (mirrors logs to the console with a [traceId] prefix; by default logs are written locally only)',
   'settings.form.apiPathHint':

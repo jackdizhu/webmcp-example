@@ -1,14 +1,17 @@
-// 对话页（页面功能级）：智能体选择器 + 消息列表 + 输入区的组合，承担本页的 Tab 激活态显隐。
-// 独立组件（MessageList/Composer）不感知 Tab 语义，显隐收敛在页面层。
+// 对话页（页面功能级）：顶部栏（智能体选择）+ 左侧栏（新建会话 + 会话列表）+
+// 右侧会话窗口 + 底部输入区 的四区布局，承担本页的 Tab 激活态显隐。
+// 独立组件（MessageList/Composer/SessionList）不感知 Tab 语义，显隐收敛在页面层。
 // 模板用 TSX：构建期经 oxc 转译为 vue/jsx-runtime 函数调用，运行时零 eval，
 // 与 MV3 扩展页 CSP 兼容（见 issues/001）。
-// 智能体切换语义（D4）：选择器只发出请求，确认流由 App 层守卫与执行；
-// 本页仅渲染「确认切换」提示条（pendingSwitchName 非空时显示）。
+// 智能体切换语义（2026-09-18 布局调整）：选择器只发出请求，App 层自动归档当前会话
+// 并开新会话（无确认流程）；本页不渲染切换确认条。
 import { defineComponent, type PropType } from 'vue';
 import { t } from '../i18n';
 import { Composer } from '../components/Composer';
 import { MessageList } from '../components/MessageList';
+import { SessionList } from '../components/SessionList';
 import type { UiMessage } from '../components/types';
+import type { StoredChatSession } from '../sessions/session-core';
 
 /** 选择器选项（由 App 从 profileStore 映射，页面不感知 Profile 完整模型）。 */
 export interface AgentOption {
@@ -30,33 +33,36 @@ export const ChatPage = defineComponent({
     active: { type: Boolean, required: true },
     /** 输入框内容（v-model 双向绑定到 App）。 */
     modelValue: { type: String, required: true },
-    /** 可选智能体列表（选择器渲染）。 */
+    /** 可选智能体列表（顶部选择器与会话列表名称反查共用）。 */
     agents: { type: Array as PropType<AgentOption[]>, required: true },
     /** 当前激活智能体 ID。 */
     activeAgentId: { type: String, required: true },
-    /** 待确认切换的智能体名（空串 = 无待确认，隐藏确认条）。 */
-    pendingSwitchName: { type: String, required: true },
+    /** 当前会话是否有消息（空会话时「新会话」按钮禁用，无归档价值）。 */
+    hasMessages: { type: Boolean, required: true },
+    /** 最近会话快照（左侧栏列表数据源，App 已按 sessionLoadLimit 裁剪）。 */
+    recentSessions: { type: Array as PropType<StoredChatSession[]>, default: () => [] },
   },
   emits: {
     'update:modelValue': (value: string) => typeof value === 'string',
     send: null,
     // TSX 中 JSX 属性名不支持 kebab-case，emits 用 camelCase 声明（运行时 emit 名称
     // 经 camelize 归一，与旧 kebab-case 事件行为一致）
-    /** 请求切换到指定智能体（App 层负责 locked 守卫与确认流）。 */
+    /** 请求切换到指定智能体（App 层负责 locked 守卫、归档当前会话并自动开新会话）。 */
     switchAgent: (id: string) => typeof id === 'string',
-    confirmSwitch: null,
-    cancelSwitch: null,
-    /** 请求查看最终组装的系统提示词（App 层组装后以消息展示）。 */
-    inspectPrompt: null,
+    /** 请求新建会话（App 层负责归档当前会话与清空）。 */
+    newSession: null,
+    /** 请求恢复指定会话（App 层执行）。 */
+    restoreSession: (session: StoredChatSession) => Boolean(session),
   },
   setup(props, { emit }) {
     return () => (
       <div class="chat-page" style={{ display: props.active ? '' : 'none' }}>
-        <div class="chat-agents">
+        {/* 顶部栏：智能体选择（切换即自动开新会话，语义在 App 层） */}
+        <div class="chat-topbar">
           <span class="chat-agents-label">{t('chat.agentLabel')}</span>
           <select
             class="chat-agents-select"
-            disabled={props.locked || props.pendingSwitchName.length > 0}
+            disabled={props.locked}
             onChange={(event: Event) => {
               emit('switchAgent', (event.target as HTMLSelectElement).value);
             }}
@@ -71,28 +77,31 @@ export const ChatPage = defineComponent({
               </option>
             ))}
           </select>
-          <button
-            class="ghost chat-agents-inspect"
-            disabled={props.locked}
-            onClick={() => emit('inspectPrompt')}
-          >
-            {t('chat.inspectPrompt')}
-          </button>
         </div>
-        {props.pendingSwitchName.length > 0 ? (
-          <div class="chat-agent-confirm">
-            <span class="chat-agent-confirm-text">
-              {t('chat.switchConfirm', { name: props.pendingSwitchName })}
-            </span>
-            <button class="chat-agent-confirm-btn" onClick={() => emit('confirmSwitch')}>
-              {t('chat.switchConfirmYes')}
+        <div class="chat-body">
+          {/* 左侧栏：新建会话 + 最近会话列表（常驻，不再限于空态展示） */}
+          <aside class="chat-sidebar">
+            <button
+              class="ghost chat-sidebar-new"
+              disabled={props.locked || !props.hasMessages}
+              title={t('chat.newSession')}
+              onClick={() => emit('newSession')}
+            >
+              {t('chat.newSession')}
             </button>
-            <button class="ghost chat-agent-confirm-cancel" onClick={() => emit('cancelSwitch')}>
-              {t('common.cancel')}
-            </button>
+            <SessionList
+              sessions={props.recentSessions}
+              agents={props.agents}
+              locked={props.locked}
+              onRestore={(session: StoredChatSession) => emit('restoreSession', session)}
+            />
+          </aside>
+          {/* 右侧区域：会话窗口 */}
+          <div class="chat-main">
+            <MessageList messages={props.messages} busy={props.busy} />
           </div>
-        ) : null}
-        <MessageList messages={props.messages} busy={props.busy} />
+        </div>
+        {/* 底部栏：输入区域 + 发送按钮 */}
         <Composer
           modelValue={props.modelValue}
           busy={props.busy || props.locked}

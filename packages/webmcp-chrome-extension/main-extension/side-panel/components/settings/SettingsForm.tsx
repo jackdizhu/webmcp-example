@@ -20,6 +20,8 @@ const EDITABLE_FIELDS = [
   'consoleOutput',
   'systemPrompt',
   'maxHistoryTurns',
+  'sessionRetentionLimit',
+  'sessionLoadLimit',
 ] as const;
 
 /** 基线快照（plain copy，供草稿初始化/还原与保存提交）。 */
@@ -164,17 +166,22 @@ export const SettingsForm = defineComponent({
       </label>
     );
 
-    const numberInput = (label: string, attrs: { min: number; step: number; hint: string }): VNode => (
+    /** 通用数字输入（泛化绑定：历史轮数上限 / 会话保留上限 / 会话加载条数）。 */
+    const numberInput = (
+      label: string,
+      key: 'maxHistoryTurns' | 'sessionRetentionLimit' | 'sessionLoadLimit',
+      attrs: { min: number; step: number; hint: string }
+    ): VNode => (
       <label class="settings-field">
         <span>{label}</span>
         <input
           type="number"
           min={attrs.min}
           step={attrs.step}
-          value={draft.value.maxHistoryTurns}
+          value={draft.value[key]}
           onInput={(event: Event) => {
             const parsed = Number.parseInt((event.target as HTMLInputElement).value, 10);
-            draft.value.maxHistoryTurns = Number.isInteger(parsed) && parsed >= attrs.min ? parsed : attrs.min;
+            draft.value[key] = Number.isInteger(parsed) && parsed >= attrs.min ? parsed : attrs.min;
           }}
         />
         <p class="settings-hint">{attrs.hint}</p>
@@ -204,12 +211,22 @@ export const SettingsForm = defineComponent({
           placeholder: t('settings.form.systemPromptPlaceholder'),
           rows: 4,
         })}
-        {numberInput(t('settings.form.maxHistoryTurns'), {
+        {numberInput(t('settings.form.maxHistoryTurns'), 'maxHistoryTurns', {
           min: 0,
           step: 1,
           hint: t('settings.form.maxHistoryTurnsHint'),
         })}
         {groupTitle('settings.summary.group.behavior')}
+        {numberInput(t('settings.form.sessionRetentionLimit'), 'sessionRetentionLimit', {
+          min: 1,
+          step: 1,
+          hint: t('settings.form.sessionRetentionLimitHint'),
+        })}
+        {numberInput(t('settings.form.sessionLoadLimit'), 'sessionLoadLimit', {
+          min: 1,
+          step: 1,
+          hint: t('settings.form.sessionLoadLimitHint'),
+        })}
         {checkbox('consoleOutput', t('settings.form.consoleOutput'))}
         <div class="settings-form-actions">
           <button type="button" disabled={props.busy} onClick={() => submit()}>
