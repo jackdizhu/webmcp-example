@@ -2,7 +2,7 @@
 // 纯逻辑（校验/格式化/历史/消息组装）全部在 debugger-core.ts，本组件仅做状态装配。
 // 模板用 TSX：构建期经 oxc 转译为 vue/jsx-runtime 函数调用，运行时零 eval，
 // 与 MV3 扩展页 CSP 兼容（见 issues/001）。
-import { computed, defineComponent, ref, watch, type VNode } from 'vue';
+import { computed, defineComponent, onUnmounted, ref, watch, type VNode } from 'vue';
 import { serializeToolResult, type PageToolMeta } from '../../../core/page-tools-bridge';
 import { t } from '../i18n';
 import { logEvent } from '../logger/logger';
@@ -71,6 +71,21 @@ export const DebugPage = defineComponent({
       },
       { immediate: true }
     );
+
+    // 工具清单自动同步（切页签刷新之上的实时通道）：
+    // - 页面侧注册/注销工具 → 桥接 toolsChanged 推送 → 自动刷新，无需手动点「刷新工具清单」；
+    // - 桥接恢复在线（断线重连成功）→ 页面工具清单可能已变化 → 自动刷新。
+    // 仅激活本页时刷新：非激活时布局隐藏，切回时上方 watch(active) 兜底刷新。
+    const offToolsChange = props.pageTools.onToolsChange(() => {
+      if (props.active) void refreshTools();
+    });
+    const offStatusChange = props.pageTools.onStatusChange((connected) => {
+      if (connected && props.active) void refreshTools();
+    });
+    onUnmounted(() => {
+      offToolsChange();
+      offStatusChange();
+    });
 
     const selectedTool = (): PageToolMeta | undefined =>
       tools.value.find((tool) => tool.name === selected.value);

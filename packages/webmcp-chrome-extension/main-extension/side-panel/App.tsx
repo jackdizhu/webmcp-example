@@ -54,6 +54,7 @@ import { createRelayStatusStore } from './relay/relay-status-store';
 import {
   createSessionId,
   deriveSessionTitle,
+  persistableMessages,
   type StoredChatSession,
 } from './sessions/session-core';
 import { initSessionStore, loadRecentSessions, saveSession } from './sessions/session-store';
@@ -233,14 +234,15 @@ export const App = defineComponent({
       recentSessions.value = await loadRecentSessions(settings.sessionLoadLimit);
     };
 
-    /** 组装当前会话快照（响应式数据由 saveSession 内部归一化为 plain，见 session-store）。 */
+    /** 组装当前会话快照（响应式数据由 saveSession 内部归一化为 plain，见 session-store）。
+     *  messages 经 persistableMessages 过滤瞬态提示（修复切换会话提示累积，2026-09-18）。 */
     const buildCurrentSession = (): StoredChatSession => ({
       id: activeSessionId.value,
       title: activeSessionTitle.value,
       agentId: profileStore.activeAgentId.value,
       createdAt: activeSessionCreatedAt.value,
       updatedAt: Date.now(),
-      messages: messages.value,
+      messages: persistableMessages(messages.value),
       llmHistory: [...chatController.getHistory()],
     });
 
@@ -277,7 +279,7 @@ export const App = defineComponent({
       chatController.clearHistory();
       messages.value = [];
       resetSessionCursor();
-      pushUiMessage('assistant', t('msg.newSessionStarted'));
+      pushUiMessage('assistant', t('msg.newSessionStarted'), { ephemeral: true });
       logEvent('info', 'chat', 'session_new', { sessionId: activeSessionId.value });
     };
 
@@ -297,7 +299,9 @@ export const App = defineComponent({
       if (session.agentId.length > 0 && profileStore.activeAgentId.value !== session.agentId) {
         await profileStore.setActive(session.agentId);
       }
-      pushUiMessage('assistant', t('msg.sessionRestored', { title: session.title }));
+      pushUiMessage('assistant', t('msg.sessionRestored', { title: session.title }), {
+        ephemeral: true,
+      });
       logEvent('info', 'chat', 'session_restored', { sessionId: session.id });
     };
 
@@ -345,11 +349,21 @@ export const App = defineComponent({
       return agentTaskHost.isTaskSession(activeSessionId.value);
     });
 
-    const pushUiMessage = (role: UiMessage['role'], content: string): UiMessage => {
+    const pushUiMessage = (
+      role: UiMessage['role'],
+      content: string,
+      opts?: { ephemeral?: boolean }
+    ): UiMessage => {
       // 必须以响应式代理入列并返回：createTurnView 持有该对象做原位变更（onEvent 回填工具痕迹、
       // setText 写最终文案）。若返回原始对象，变更会绕过响应式 —— UI 只能等 busy 翻转才整体重绘，
       // 表现为「工具响应不立即展示，整轮结束后一次性出现」。
-      const item = reactive<UiMessage>({ role, content, toolTrace: [] });
+      // opts.ephemeral：瞬态 UI 反馈（恢复/新建/切换/设置保存等提示），归档时被 persistableMessages 过滤。
+      const item = reactive<UiMessage>({
+        role,
+        content,
+        toolTrace: [],
+        ...(opts?.ephemeral ? { ephemeral: true } : {}),
+      });
       messages.value.push(item);
       return item;
     };
@@ -473,11 +487,11 @@ export const App = defineComponent({
       },
       onMissingApiKey: () => {
         setTab('settings');
-        pushUiMessage('assistant', t('msg.missingApiKey'));
+        pushUiMessage('assistant', t('msg.missingApiKey'), { ephemeral: true });
       },
       onMissingApiPath: () => {
         setTab('settings');
-        pushUiMessage('assistant', API_PATH_EMPTY_HINT);
+        pushUiMessage('assistant', API_PATH_EMPTY_HINT, { ephemeral: true });
       },
       onBusyChange: (value) => {
         busy.value = value;
@@ -537,7 +551,11 @@ export const App = defineComponent({
       messages.value = [];
       await profileStore.setActive(id);
       resetSessionCursor();
-      pushUiMessage('assistant', t('msg.agentSwitched', { name: profileStore.activeAgent.value?.name ?? id }));
+      pushUiMessage(
+        'assistant',
+        t('msg.agentSwitched', { name: profileStore.activeAgent.value?.name ?? id }),
+        { ephemeral: true }
+      );
       logEvent('info', 'chat', 'agent_switched', { agentId: id });
     };
 
@@ -551,7 +569,8 @@ export const App = defineComponent({
         'assistant',
         settings.consoleOutput
           ? t('msg.settingsSavedConsole')
-          : t('msg.settingsSaved')
+          : t('msg.settingsSaved'),
+        { ephemeral: true }
       );
       await refreshTools();
     };

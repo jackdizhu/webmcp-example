@@ -4,11 +4,13 @@ import {
   createSessionId,
   deriveSessionTitle,
   evictionIds,
+  persistableMessages,
   SESSION_TITLE_MAX_LENGTH,
   sliceRecent,
   trimSessions,
   type StoredChatSession,
 } from './session-core';
+import type { UiMessage } from '../components/types';
 
 /** 组装一条会话（updatedAt 为主要排序维度）。 */
 function makeSession(id: string, updatedAt: number): StoredChatSession {
@@ -123,5 +125,58 @@ describe('evictionIds', () => {
       expect([...kept, ...evicted].sort()).toEqual(sessions.map((s) => s.id).sort());
       expect(kept.filter((id) => evicted.includes(id))).toEqual([]);
     }
+  });
+});
+
+describe('persistableMessages', () => {
+  const realUser: UiMessage = { role: 'user', content: '调用 get_status', toolTrace: [] };
+  const realAssistant: UiMessage = {
+    role: 'assistant',
+    content: '当前状态正常。',
+    toolTrace: [{ name: 'get_status', result: 'ok', failed: false }],
+  };
+  const ephemeralNotice: UiMessage = {
+    role: 'assistant',
+    content: '已恢复会话「调用 get_status」，对话上下文已还原。',
+    toolTrace: [],
+    ephemeral: true,
+  };
+
+  it('过滤瞬态提示，保留真实对话内容（含工具痕迹）', () => {
+    const result = persistableMessages([realUser, realAssistant, ephemeralNotice]);
+    expect(result).toEqual([realUser, realAssistant]);
+  });
+
+  it('修复回归：多次切换累积的提示全部剥离，快照不再增长（2026-09-18 bug 场景）', () => {
+    // 模拟旧缺陷下被污染的 messages：真实内容 + 历次恢复/切换留下的多条提示
+    // （内联字面量 role 会被推断为宽 string，显式标注对齐 UiMessage）
+    const switchedNotice: UiMessage = {
+      role: 'assistant',
+      content: '已切换至 多轮循环智能体。',
+      toolTrace: [],
+      ephemeral: true,
+    };
+    const polluted = [
+      realUser,
+      ephemeralNotice,
+      switchedNotice,
+      realAssistant,
+      { ...ephemeralNotice, ephemeral: true },
+    ];
+    expect(persistableMessages(polluted)).toEqual([realUser, realAssistant]);
+  });
+
+  it('返回独立拷贝：改动结果不影响源数组与源 toolTrace（防响应式代理外泄）', () => {
+    const source = [realUser, realAssistant];
+    const result = persistableMessages(source);
+    result[0]!.content = '篡改';
+    result[1]!.toolTrace.push({ name: 'x', result: 'y', failed: false });
+    expect(source[0]!.content).toBe('调用 get_status');
+    expect(source[1]!.toolTrace).toHaveLength(1);
+  });
+
+  it('边界：空数组返回空数组；全 ephemeral 返回空数组', () => {
+    expect(persistableMessages([])).toEqual([]);
+    expect(persistableMessages([ephemeralNotice, ephemeralNotice])).toEqual([]);
   });
 });

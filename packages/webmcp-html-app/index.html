@@ -98,6 +98,15 @@
       .at-meta { margin: 0 0 6px; font-size: 12px; color: var(--muted); word-break: break-all; }
       .at-meta code { background: #eef2f7; padding: 0 4px; border-radius: 4px; }
       .at-result-body { margin: 0; font-size: 12px; white-space: pre-wrap; word-break: break-all; max-height: 240px; overflow: auto; }
+      /* 工具注册管理面板（main.ts：移除注册 / 重新注册按钮） */
+      .tr-title { font-size: 16px; margin: 0 0 8px; }
+      .tr-status { font-size: 14px; margin: 0 0 12px; }
+      .tr-actions { display: flex; gap: 10px; flex-wrap: wrap; }
+      .tr-actions button { background: var(--accent); color: #fff; border: none; border-radius: 8px; padding: 9px 16px; font-size: 14px; cursor: pointer; }
+      .tr-actions button:hover:not(:disabled) { filter: brightness(0.95); }
+      .tr-actions button:disabled { opacity: 0.5; cursor: not-allowed; }
+      .tr-actions #tool-unregister-btn { background: #dc2626; }
+      .tr-hint { color: var(--muted); font-size: 12px; margin: 10px 0 0; }
     </style>
   </head>
   <body data-page-node-id="zcR5GwPwhEbCUwTh6uhESO">

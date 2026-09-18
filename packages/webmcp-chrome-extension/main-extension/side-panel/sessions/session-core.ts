@@ -98,3 +98,14 @@ export function sliceRecent(
 ): StoredChatSession[] {
   return trimSessions(sessions, limit);
 }
+
+/**
+ * 归档可见消息：过滤瞬态提示（ephemeral，如「已恢复会话」「已切换至」等 UI 反馈），
+ * 快照只含真实对话内容（2026-09-18 修复切换会话提示累积问题）。
+ * 同时做浅拷贝剥离响应式代理（与 saveSession 内 JSON round-trip 双保险）。
+ */
+export function persistableMessages(messages: readonly UiMessage[]): UiMessage[] {
+  return messages
+    .filter((item) => item.ephemeral !== true)
+    .map((item) => ({ ...item, toolTrace: [...item.toolTrace] }));
+}

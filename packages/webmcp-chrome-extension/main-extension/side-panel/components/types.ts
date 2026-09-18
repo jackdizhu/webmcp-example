@@ -23,6 +23,13 @@ export interface UiMessage {
   role: 'user' | 'assistant';
   content: string;
   toolTrace: ToolTraceItem[];
+  /**
+   * 瞬态提示（2026-09-18 修复：会话恢复/新建/切换/保存设置等 UI 反馈）。
+   * 仅本次 UI 展示 —— 归档快照时被 persistableMessages 过滤，绝不持久化。
+   * 否则「恢复会话 A → 切到 B（A 被归档）→ 切回 A → 再追加一条提示」循环累积，
+   * 且提示随快照永久固化、多次切换后不断增长。旧快照无此字段（undefined → falsy）天然兼容。
+   */
+  ephemeral?: boolean;
 }
 
 /** 工具执行占位文案，完成后按 name 匹配回填。 */
