@@ -2,6 +2,7 @@
 import { initializeWebMCPPolyfill } from '@mcp-b/webmcp-polyfill';
 import { createGetStatusTool } from './tools/get-status';
 import { buildOrderFormDemo } from './demo/order-form';
+import { buildAgentTaskTestPanel } from './agent-task-test';
 
 // 初始化 WebMCP polyfill（若无原生支持则打补丁，已有原生支持则为 no-op）。
 initializeWebMCPPolyfill();
@@ -18,6 +19,7 @@ app.innerHTML = `
   <h1>WebMCP 表单填充 Demo</h1>
   <p class="subtitle">AI 通过页面注册的 MCP 工具完成「读 schema → 填表单 → 提交复核」闭环，并查询订单结果表格。</p>
   <div id="demo-root"></div>
+  <section id="agent-task-panel-root" class="card" style="margin-top: 16px;"></section>
 `;
 
 // 既有示例工具
@@ -29,3 +31,6 @@ const formTools = buildOrderFormDemo(demoRoot);
 for (const tool of formTools) {
   await modelContext.registerTool(tool);
 }
+
+// 页签反调联调测试面板（R5）：验证 window.webmcpAgent C5 通道
+buildAgentTaskTestPanel(document.querySelector<HTMLElement>('#agent-task-panel-root')!);

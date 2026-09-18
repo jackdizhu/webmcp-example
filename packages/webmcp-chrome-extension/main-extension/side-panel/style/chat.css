@@ -78,3 +78,16 @@
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
 .session-item-meta { font-size: 11px; color: var(--faint); }
+
+/* 任务会话徽标（C5 页签反调，2026-09-18）：来源标识 + 四态状态（running/cancelled/failed/completed） */
+.session-item-badges { display: flex; flex-wrap: wrap; gap: 4px; }
+.session-item-badge {
+  display: inline-block; padding: 0 6px; border-radius: 999px;
+  font-size: 10px; line-height: 16px; color: var(--text-strong);
+  border: 1px solid var(--border); background: var(--surface);
+  max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.session-item-status-running { color: var(--accent, #2563eb); border-color: currentColor; }
+.session-item-status-cancelled { color: var(--faint); border-color: currentColor; }
+.session-item-status-failed { color: #dc2626; border-color: currentColor; }
+.session-item-status-completed { color: #16a34a; border-color: currentColor; }

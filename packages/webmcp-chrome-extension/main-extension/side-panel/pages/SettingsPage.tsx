@@ -9,6 +9,7 @@
 // 与 MV3 扩展页 CSP 兼容（见 issues/001）。
 import { defineComponent, ref, watch, type PropType } from 'vue';
 import { t } from '../i18n';
+import { TAB_INVOKE_ALLOWLIST_KEY } from '../../../core/agent-task-protocol';
 import { SubPageFrame } from '../components/SubPageFrame';
 import type { PanelSettings } from '../runtime/panel-client';
 import { SettingsForm } from '../components/settings/SettingsForm';
@@ -90,13 +91,88 @@ export const SettingsPage = defineComponent({
           logHint.value = '';
           resetConfirmClear();
           void refreshLogCount();
+          void refreshAllowlist();
         }
       },
       { immediate: true }
     );
 
+    // ---- 页签反调白名单区块（C5，Q5：默认拒绝；独立存储键，保存即时生效）----
+    /** 白名单草稿（一行一个 origin，与 storage 中的字符串数组互转）。 */
+    const allowlistDraft = ref('');
+    const allowlistHint = ref('');
+    const allowlistSaving = ref(false);
+
+    const refreshAllowlist = async (): Promise<void> => {
+      try {
+        const stored = await chrome.storage.local.get([TAB_INVOKE_ALLOWLIST_KEY]);
+        const value = stored[TAB_INVOKE_ALLOWLIST_KEY];
+        allowlistDraft.value = Array.isArray(value)
+          ? (value as unknown[]).filter((item): item is string => typeof item === 'string').join('\n')
+          : '';
+      } catch {
+        allowlistDraft.value = '';
+      }
+    };
+
+    const handleSaveAllowlist = async (): Promise<void> => {
+      if (allowlistSaving.value) return;
+      allowlistSaving.value = true;
+      try {
+        // 一行一个 origin：trim + 去空行 + 去重；SW 路由经 storage.onChanged 即时刷新缓存
+        const origins = [
+          ...new Set(
+            allowlistDraft.value
+              .split('\n')
+              .map((line) => line.trim())
+              .filter((line) => line.length > 0)
+          ),
+        ];
+        await chrome.storage.local.set({ [TAB_INVOKE_ALLOWLIST_KEY]: origins });
+        allowlistDraft.value = origins.join('\n');
+        allowlistHint.value = t('settings.allowlistSaved');
+        logEvent('info', 'app', 'tab_invoke_allowlist_saved', origins.length);
+      } catch (error) {
+        allowlistHint.value = t('settings.allowlistSaveFailed', {
+          message: error instanceof Error ? error.message : String(error),
+        });
+      } finally {
+        allowlistSaving.value = false;
+      }
+    };
+
     // 表单 dirty 状态（Form 上抛；view 态摘要显示「有未保存修改」提示用）
     const formDirty = ref(false);
+
+    // 白名单折叠区（与日志区同范式：details + summary）
+    const renderAllowlist = () => (
+      <details class="settings-logs-fold">
+        <summary>
+          <span>{t('settings.allowlistTitle')}</span>
+        </summary>
+        <div class="settings-logs">
+          <p class="settings-hint">{t('settings.allowlistHint')}</p>
+          <textarea
+            class="settings-textarea"
+            rows={3}
+            value={allowlistDraft.value}
+            placeholder={t('settings.allowlistPlaceholder')}
+            onInput={(event: Event) => {
+              allowlistDraft.value = (event.target as HTMLTextAreaElement).value;
+            }}
+          />
+          <button
+            class="ghost"
+            type="button"
+            disabled={allowlistSaving.value}
+            onClick={() => void handleSaveAllowlist()}
+          >
+            {t('common.save')}
+          </button>
+          {allowlistHint.value ? <p class="settings-hint settings-hint-ok">{allowlistHint.value}</p> : null}
+        </div>
+      </details>
+    );
 
     // S2 日志区降级为页脚折叠 <details>（默认收起，summary 行显示标题 + 条数）
     const renderLogs = () => (
@@ -145,6 +221,7 @@ export const SettingsPage = defineComponent({
               }}
             </SettingsSummary>
             {props.busy ? <p class="settings-hint">{t('settings.lockedHint')}</p> : null}
+            {renderAllowlist()}
             {renderLogs()}
           </>
         ) : (

@@ -8,13 +8,14 @@
 // 页面端零侵入（无 embed iframe）。连接存续期间 relay 15s 心跳持续重置
 // SW 空闲计时，不会休眠；无 relay/无标签页时休眠属预期行为（dormant）。
 // 注意：MV3 SW WebSocket 要求 Chrome 116+（manifest minimum_chrome_version 已同步）。
+import { startAgentTaskRouter } from '../core/agent-task-router';
 import { startRelayStatusPort, startTabSourceManager } from '../core/tab-source-manager';
 
 /**
  * SW 构建标记：每次改动 SW 相关代码后更新，用于在 SW 控制台确认
  * 浏览器实际加载的是哪个构建（排查「改了代码但行为没变」的 stale dist 问题）。
  */
-const SW_BUILD_TAG = 'global-tab-selection + builtin-tools (2026-09-12)';
+const SW_BUILD_TAG = 'agent-task-router + global-tab-selection (2026-09-18)';
 console.info(`[WebMCP] SW boot: ${SW_BUILD_TAG}`);
 
 // 点击工具栏图标时打开侧边栏（行为由浏览器持久记住，无需每次 SW 唤醒都重设也安全，
@@ -32,4 +33,12 @@ try {
   startRelayStatusPort(manager);
 } catch (error) {
   console.error('[WebMCP] Failed to start tab source manager:', error);
+}
+
+// Tab 反调路由（C5 第 3 跳）：页签 content script ↔ 侧边栏任务宿主的请求路由 +
+// 可信来源注入 + origin 白名单闸门（tabInvokeAllowlist，默认拒绝）。失败不阻断其他编排。
+try {
+  startAgentTaskRouter();
+} catch (error) {
+  console.error('[WebMCP] Failed to start agent task router:', error);
 }

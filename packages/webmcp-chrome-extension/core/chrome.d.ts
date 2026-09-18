@@ -9,6 +9,8 @@ declare namespace chrome {
     /** 长连接端口（chrome.runtime.connect / onConnect 的两端句柄）。 */
     interface Port {
       readonly name: string;
+      /** 连接发起方信息（onConnect 监听器内可信；接收侧读不到为 undefined）。 */
+      readonly sender?: MessageSender;
       postMessage(message: unknown): void;
       disconnect(): void;
       onMessage: {
@@ -19,6 +21,16 @@ declare namespace chrome {
         addListener(callback: (port: Port) => void): void;
         removeListener(callback: (port: Port) => void): void;
       };
+    }
+
+    /**
+     * 连接发起方信息（onConnect 监听器内可信；SW 反调路由据此注入 sender.tabId/origin）。
+     * content script 发起的连接必有 tab 与 origin（http(s)/localhost 来源）。
+     */
+    interface MessageSender {
+      tab?: tabs.Tab;
+      origin?: string;
+      url?: string;
     }
 
     /** 上一条 Chrome API 调用的错误；仅在回调/监听器内同步读取有效（读取即视为已消费）。 */
@@ -122,6 +134,12 @@ declare namespace chrome {
       function set(items: Record<string, unknown>): Promise<void>;
       function remove(keys: string | string[]): Promise<void>;
     }
+
+    /** 任一 storage 区变化事件（反调白名单缓存即时刷新用）。 */
+    const onChanged: {
+      addListener(callback: (changes: Record<string, unknown>, areaName: string) => void): void;
+      removeListener(callback: (changes: Record<string, unknown>, areaName: string) => void): void;
+    };
   }
 
   namespace sidePanel {

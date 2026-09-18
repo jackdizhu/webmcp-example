@@ -59,6 +59,23 @@ export const SessionList = defineComponent({
                   onClick={() => emit('restore', session)}
                 >
                   <span class="session-item-title">{session.title}</span>
+                  {session.origin !== undefined || session.taskStatus !== undefined ? (
+                    <span class="session-item-badges">
+                      {session.origin !== undefined ? (
+                        <span
+                          class="session-item-badge session-item-badge-origin"
+                          title={session.origin}
+                        >
+                          {t('chat.taskBadge')}
+                        </span>
+                      ) : null}
+                      {session.taskStatus !== undefined ? (
+                        <span class={`session-item-badge session-item-status-${session.taskStatus}`}>
+                          {t(`chat.taskStatus.${session.taskStatus}`)}
+                        </span>
+                      ) : null}
+                    </span>
+                  ) : null}
                   <span class="session-item-meta">
                     {t('chat.sessionMeta', {
                       agent: agentName(session.agentId),

@@ -2,6 +2,7 @@
 // 数据模型 + ID/标题生成 + 排序截取纯函数。零 IO、零 Vue、零 chrome.*，
 // vitest 直测（jsdom 无 IndexedDB，IO 层不做浏览器内单测，决策全部收敛在此）。
 import type { ChatMessage } from 'webmcp-agent-chat-core';
+import type { TaskSessionStatus } from '../../../core/agent-task-protocol';
 import type { UiMessage } from '../components/types';
 
 /** 单个持久化会话快照（IndexedDB store `sessions` 记录，keyPath = id）。 */
@@ -20,6 +21,17 @@ export interface StoredChatSession {
   messages: UiMessage[];
   /** LLM 跨轮历史快照（恢复时经 controller.setHistory 回灌，方案 D2）。 */
   llmHistory: ChatMessage[];
+  /**
+   * 页签反调任务的发起页 origin（2026-09-18 C5 预留字段；普通侧栏会话缺省）。
+   * 归档来源：SW 路由注入的可信 sender.origin（页面自报值不采信）。
+   */
+  origin?: string;
+  /**
+   * 任务会话状态（四态定稿：running 运行中 / cancelled 手动终止 / failed 执行异常 /
+   * completed 执行完成）。普通侧栏会话缺省；任务会话由 agent-task-host 写入，
+   * 开始时 running 归档、终态覆写（§4.6）。
+   */
+  taskStatus?: TaskSessionStatus;
 }
 
 const RANDOM_LENGTH = 6;

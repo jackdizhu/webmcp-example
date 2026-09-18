@@ -62,6 +62,11 @@ export const zhCN = {
   'chat.timeMinutesAgo': '{n} 分钟前',
   'chat.timeHoursAgo': '{n} 小时前',
   'chat.timeDaysAgo': '{n} 天前',
+  'chat.taskBadge': '页面任务',
+  'chat.taskStatus.running': '运行中',
+  'chat.taskStatus.cancelled': '手动终止',
+  'chat.taskStatus.failed': '执行异常',
+  'chat.taskStatus.completed': '执行完成',
 
   // ---- App 层动态消息（pushUiMessage / notifyA2a）----
   'msg.missingApiKey': '请先在「设置」页填写 API Key 后再开始对话。',
@@ -135,6 +140,12 @@ export const zhCN = {
   'settings.logsCleared': '日志已清空',
   'settings.editConfig': '编辑配置',
   'settings.lockedHint': 'agent 对话或 relay 调用进行中，暂不可编辑。',
+  'settings.allowlistTitle': '页签反调白名单',
+  'settings.allowlistHint':
+    '允许通过 window.webmcpAgent.asyncCreateAgentTask 发起 agent / tool 任务的页面 origin（每行一个，精确匹配，如 https://example.com 或 http://localhost:5173）。默认拒绝所有页面；保存后即时生效。',
+  'settings.allowlistPlaceholder': 'https://example.com\nhttp://localhost:5173',
+  'settings.allowlistSaved': '白名单已保存，即时生效。',
+  'settings.allowlistSaveFailed': '白名单保存失败：{message}',
 
   // ---- 设置摘要（只读态）----
   'settings.summary.title': '当前生效配置（已保存）',

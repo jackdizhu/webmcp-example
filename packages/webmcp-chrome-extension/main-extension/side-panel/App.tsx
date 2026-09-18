@@ -26,7 +26,8 @@ import { createA2aToolHost, loadA2aTokens, saveA2aTokens } from './a2a/a2a-host'
 import { loadA2aConfig, saveA2aConfig, toA2aConfigSnapshot } from './a2a/a2a-config-store';
 import { createAgentProfileStore } from './a2a/agent-profile-store';
 import { initLocale, joinList, t } from './i18n';
-import { createHostSkillSource, getBuiltinSkillSummary } from './runtime/skill-assets';
+import { createHostSkillSource, getBuiltinSkillSummary, BUILTIN_SKILLS } from './runtime/skill-assets';
+import { createAgentTaskHost } from './runtime/agent-task-host';
 import { composeHandoffMessage, type DebugRun } from './runtime/debugger-core';
 import {
   initLogger,
@@ -306,6 +307,44 @@ export const App = defineComponent({
       activeTab.value = next;
     };
 
+    // ---- 页签反调任务宿主（C5，R4 后台运行语义）----
+    // 任务与手打对话并行（Q11：无 busy 互斥）；终止按当前展示会话分派（Q13）。
+    // 宿主为 Vue-free 运行时模块：活跃状态经 onTaskActivity 版本号驱动 computed 重算。
+    const taskActivityVersion = ref(0);
+    const agentTaskHost = createAgentTaskHost({
+      listTools: async () => {
+        if (!pageTools) throw new Error('页面工具客户端未就绪');
+        const tools = await pageTools.listTools();
+        toolsCount.value = tools.length;
+        return tools;
+      },
+      callTool: async (name, args) => {
+        if (!pageTools) throw new Error('页面工具客户端未就绪');
+        return pageTools.callTool(name, args);
+      },
+      listAgentProfiles: () => profileStore.agents.value,
+      listSkillSummaries: () => BUILTIN_SKILLS,
+      getGlobalSystemPrompt: () => settings.systemPrompt,
+      getLlmBaseConfig: () => ({
+        apiKey: settings.apiKey,
+        baseUrl: settings.baseUrl,
+        apiPath: settings.apiPath,
+        model: settings.model,
+        apiProtocol: settings.apiProtocol,
+        maxTokens: settings.maxTokens,
+      }),
+      archiveSession: archiveSnapshot,
+      onLog: (level, event, payload) => logEvent(level, 'tasks', event, payload),
+      onTaskActivity: () => {
+        taskActivityVersion.value += 1;
+      },
+    });
+    /** 当前展示会话是否为活跃任务（排队中/执行中）：驱动 TabBar「终止」按钮（Q13）。 */
+    const activeTaskRunning = computed(() => {
+      void taskActivityVersion.value; // 任务受理/终态时版本自增，触发重算
+      return agentTaskHost.isTaskSession(activeSessionId.value);
+    });
+
     const pushUiMessage = (role: UiMessage['role'], content: string): UiMessage => {
       // 必须以响应式代理入列并返回：createTurnView 持有该对象做原位变更（onEvent 回填工具痕迹、
       // setText 写最终文案）。若返回原始对象，变更会绕过响应式 —— UI 只能等 busy 翻转才整体重绘，
@@ -473,8 +512,15 @@ export const App = defineComponent({
       await chatController.runTurn(composeHandoffMessage(run));
     };
 
-    /** 全局「终止」：终止 agent 对话（共享库控制器 AbortSignal）+ 停止等待 relay 调用。 */
+    /** 全局「终止」：按当前展示会话分派（Q13）—— 任务会话终止该任务（先切到该会话）；
+     *  普通会话终止 agent 对话轮 + 停止等待 relay 调用。任务与手打对话并行，两者可同时生效。 */
     const terminate = (): void => {
+      if (activeTaskRunning.value) {
+        const stopped = agentTaskHost.terminateTask(activeSessionId.value);
+        if (stopped) {
+          logEvent('info', 'tasks', 'task_terminated_by_user', { sessionId: activeSessionId.value });
+        }
+      }
       if (busy.value) chatController.abort();
       if (relayStore.runningCount.value > 0) {
         relayStore.terminateWait();
@@ -618,6 +664,9 @@ export const App = defineComponent({
       // SW 推送新 selection 后上面的订阅回调完成建连
       relayStore.requestResetSelection();
 
+      // 页签反调任务宿主：连接 SW 路由（依赖 pageTools/profileStore/settings 已就绪）
+      agentTaskHost.start();
+
       await refreshTools();
     });
 
@@ -626,6 +675,7 @@ export const App = defineComponent({
       unsubscribeToolsChange?.();
       relayStore.dispose();
       relayStatusClient?.disconnect();
+      agentTaskHost.dispose();
       pageTools?.disconnect();
       pageTools = null;
     });
@@ -646,6 +696,7 @@ export const App = defineComponent({
           activeTab={activeTab.value}
           locked={locked.value}
           phaseLabel={phaseLabel.value}
+          showAbort={activeTaskRunning.value}
           onUpdate:activeTab={(value: PanelPage) => {
             setTab(value);
           }}

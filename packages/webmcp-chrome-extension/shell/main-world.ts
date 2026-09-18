@@ -6,3 +6,8 @@
 //
 // `@mcp-b/global` 会优先使用浏览器原生 WebMCP，缺失时才降级到 polyfill。
 import '@mcp-b/global';
+// Tab 反调 SDK（window.webmcpAgent）：页面 → 扩展能力的反向通道入口（C5/D2）。
+// 仅 window.postMessage + 应答监听，零特权 API；安装幂等，已存在不覆盖。
+import { installAgentTaskSdk } from './agent-task-sdk';
+
+installAgentTaskSdk();

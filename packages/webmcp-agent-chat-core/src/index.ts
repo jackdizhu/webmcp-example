@@ -110,6 +110,15 @@ export {
   type ChatTurnView,
 } from './chat-controller';
 export {
+  AgentTaskRunnerError,
+  resolveAgentProfile,
+  resolveSkillSummary,
+  runAgentTask,
+  type AgentTaskRunDeps,
+  type AgentTaskRunParams,
+  type AgentTaskRunResult,
+} from './agent-task-runner';
+export {
   DEFAULT_ACTIVE_AGENT_ID,
   LEGACY_DEFAULT_AGENT_ID,
   composeSystemPrompt,

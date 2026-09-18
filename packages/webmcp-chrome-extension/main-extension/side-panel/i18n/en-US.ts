@@ -60,6 +60,11 @@ export const enUS: Record<import('./zh-CN').MessageKey, string> = {
   'chat.timeMinutesAgo': '{n} min ago',
   'chat.timeHoursAgo': '{n} h ago',
   'chat.timeDaysAgo': '{n} d ago',
+  'chat.taskBadge': 'Page task',
+  'chat.taskStatus.running': 'Running',
+  'chat.taskStatus.cancelled': 'Cancelled',
+  'chat.taskStatus.failed': 'Failed',
+  'chat.taskStatus.completed': 'Completed',
 
   // ---- App-level dynamic messages (pushUiMessage / notifyA2a) ----
   'msg.missingApiKey': 'Please fill in the API Key on the "Settings" page before starting a chat.',
@@ -136,6 +141,12 @@ export const enUS: Record<import('./zh-CN').MessageKey, string> = {
   'settings.logsCleared': 'Logs cleared',
   'settings.editConfig': 'Edit Config',
   'settings.lockedHint': 'Agent chat or relay call in progress; editing unavailable for now.',
+  'settings.allowlistTitle': 'Tab-invoked task allowlist',
+  'settings.allowlistHint':
+    'Page origins allowed to start agent / tool tasks via window.webmcpAgent.asyncCreateAgentTask (one per line, exact match, e.g. https://example.com or http://localhost:5173). All pages are denied by default; changes take effect immediately after saving.',
+  'settings.allowlistPlaceholder': 'https://example.com\nhttp://localhost:5173',
+  'settings.allowlistSaved': 'Allowlist saved and effective immediately.',
+  'settings.allowlistSaveFailed': 'Failed to save allowlist: {message}',
 
   // ---- Settings summary (view mode) ----
   'settings.summary.title': 'Active Configuration (saved)',

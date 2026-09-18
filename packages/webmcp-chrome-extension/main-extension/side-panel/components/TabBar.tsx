@@ -30,6 +30,11 @@ export const TabBar = defineComponent({
     locked: { type: Boolean, required: true },
     /** 锁定期间展示的执行提示（如「agent 对话执行中」，App 层已过 t()）。 */
     phaseLabel: { type: String, default: '' },
+    /**
+     * 展示「终止」按钮（不锁定）：当前展示会话是运行中的页签反调任务（Q13 ——
+     * 终止作用于当前展示会话，后台任务需先切换到该会话再点终止）。
+     */
+    showAbort: { type: Boolean, default: false },
   },
   emits: {
     'update:activeTab': (value: PanelPage) => PAGES.some((page) => page.id === value),
@@ -51,9 +56,9 @@ export const TabBar = defineComponent({
     return () => (
       <nav class={['tabs', props.locked ? 'tabs-locked' : '']}>
         {PAGES.map(tabButton)}
-        {props.locked ? (
+        {props.locked || props.showAbort ? (
           <span class="tabs-lock-area">
-            <span class="tabs-lock-label">{props.phaseLabel}</span>
+            {props.locked ? <span class="tabs-lock-label">{props.phaseLabel}</span> : null}
             <button class="tabs-abort" type="button" onClick={() => emit('abort')}>
               {t('tab.abort')}
             </button>

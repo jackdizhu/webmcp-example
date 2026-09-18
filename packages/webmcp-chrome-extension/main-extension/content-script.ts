@@ -1,5 +1,6 @@
 import { connectWebMCPClient } from '../core/content-script';
 import { startPageToolsBridge, type PageToolsBridgeHandle } from '../core/page-tools-bridge';
+import { startAgentTaskTabBridge } from '../core/agent-task-tab-bridge';
 import type { Client } from '@modelcontextprotocol/client';
 
 /** 桥接句柄：main() 同步注册（早于 MCP 握手完成），listChanged 回调触发时必然可用。 */
@@ -86,6 +87,10 @@ async function main(): Promise<void> {
   // 桥接请求会等待 clientPromise 落定后执行，握手期间的请求返回明确错误。
   const clientPromise = connectWithRetry();
   bridge = startPageToolsBridge(clientPromise);
+  // Tab 反调桥接（C5）：同步注册，不依赖 MCP 握手 —— MAIN world SDK 的
+  // window.webmcpAgent 请求经此转发 SW 路由；失败不阻断页面工具桥接。
+  // 句柄无需保存：桥接随 content script 生命周期存续，无主动停止场景
+  startAgentTaskTabBridge();
 
   const client = await clientPromise;
   await waitForDocument();
