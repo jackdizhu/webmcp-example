@@ -15,7 +15,7 @@ import { startRelayStatusPort, startTabSourceManager } from '../core/tab-source-
  * SW 构建标记：每次改动 SW 相关代码后更新，用于在 SW 控制台确认
  * 浏览器实际加载的是哪个构建（排查「改了代码但行为没变」的 stale dist 问题）。
  */
-const SW_BUILD_TAG = 'agent-task-router + global-tab-selection (2026-09-18)';
+const SW_BUILD_TAG = 'host-status broadcast + agent-init route (2026-09-19)';
 console.info(`[WebMCP] SW boot: ${SW_BUILD_TAG}`);
 
 // 点击工具栏图标时打开侧边栏（行为由浏览器持久记住，无需每次 SW 唤醒都重设也安全，
@@ -26,19 +26,25 @@ void chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true }).catch((
 
 // 标签页源编排：顶层注册保证 SW 每次唤醒都重建监听并重扫已打开页面。
 // 构建失败或非 Chrome 环境不应阻断侧边栏入口行为，故 try/catch 兜底。
+// manager 实例提升至外层：agent-task-router 的宿主关闭广播依赖其已连接页签集合（C7 Q2）。
+let tabSourceManager: ReturnType<typeof startTabSourceManager> | null = null;
 try {
-  const manager = startTabSourceManager();
+  tabSourceManager = startTabSourceManager();
   // relay 连接状态展示端口：侧边栏经 chrome.runtime.connect 订阅各标签页
   // 连接状态（snapshot 立即下发 + 变更推送），并唤醒 SW。
-  startRelayStatusPort(manager);
+  startRelayStatusPort(tabSourceManager);
 } catch (error) {
   console.error('[WebMCP] Failed to start tab source manager:', error);
 }
 
 // Tab 反调路由（C5 第 3 跳）：页签 content script ↔ 侧边栏任务宿主的请求路由 +
-// 可信来源注入 + origin 白名单闸门（tabInvokeAllowlist，默认拒绝）。失败不阻断其他编排。
+// 可信来源注入 + origin 白名单闸门（tabInvokeAllowlist，默认拒绝）。
+// C6：init-request 拉取同闸门转发；C7：宿主关闭广播目标 = 数据源已连接页签。
+// 失败不阻断其他编排。
 try {
-  startAgentTaskRouter();
+  startAgentTaskRouter({
+    getBroadcastTabIds: () => tabSourceManager?.getConnectedTabIds() ?? [],
+  });
 } catch (error) {
   console.error('[WebMCP] Failed to start agent task router:', error);
 }

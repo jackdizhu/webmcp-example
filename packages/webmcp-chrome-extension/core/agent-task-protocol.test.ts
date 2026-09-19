@@ -3,6 +3,9 @@ import { describe, expect, it } from 'vitest';
 import {
   AGENT_TASK_ERROR_CODES,
   createTaskId,
+  isAgentHostStatusBroadcast,
+  isAgentHostStatusQuery,
+  isAgentHostStatusReply,
   isAgentTaskErrorCode,
   isAgentTaskHostReplyMessage,
   isAgentTaskTabMessage,
@@ -104,20 +107,38 @@ describe('validateAgentTaskPayload（按 taskType 分发）', () => {
 });
 
 describe('线消息与枚举守卫', () => {
-  it('isAgentTaskTabMessage：create-task/heartbeat/cancel-task 放行，其余拒绝', () => {
+  it('isAgentTaskTabMessage：create-task/heartbeat/cancel-task/init-request 放行，其余拒绝', () => {
     expect(isAgentTaskTabMessage({ type: 'create-task', requestId: 'r1', payload: {} })).toBe(true);
     expect(isAgentTaskTabMessage({ type: 'heartbeat', requestId: 'r1', ts: 1 })).toBe(true);
     expect(isAgentTaskTabMessage({ type: 'cancel-task', requestId: 'r1', taskId: 't' })).toBe(true);
+    expect(isAgentTaskTabMessage({ type: 'init-request', requestId: 'r2' })).toBe(true);
     expect(isAgentTaskTabMessage({ type: 'task-done', requestId: 'r1' })).toBe(false);
     expect(isAgentTaskTabMessage({ type: 'create-task' })).toBe(false);
+    expect(isAgentTaskTabMessage({ type: 'init-request' })).toBe(false);
     expect(isAgentTaskTabMessage(null)).toBe(false);
   });
 
-  it('isAgentTaskHostReplyMessage：ack/done/error 放行，其余拒绝', () => {
+  it('isAgentTaskHostReplyMessage：ack/done/error/init-data 放行，其余拒绝', () => {
     expect(isAgentTaskHostReplyMessage({ type: 'task-ack', requestId: 'r1', taskId: 't', sessionId: 's' })).toBe(true);
     expect(isAgentTaskHostReplyMessage({ type: 'task-done', requestId: 'r1', taskId: 't', sessionId: 's', status: 'completed', result: null })).toBe(true);
     expect(isAgentTaskHostReplyMessage({ type: 'task-error', requestId: 'r1', code: 'INVALID_PARAMS', message: 'm' })).toBe(true);
+    expect(isAgentTaskHostReplyMessage({ type: 'init-data', requestId: 'r2', payload: { version: 1 } })).toBe(true);
     expect(isAgentTaskHostReplyMessage({ type: 'create-task', requestId: 'r1' })).toBe(false);
+    // 结构性最小校验口径（与 create-task payload 同理）：只验 type + requestId，payload 深度校验在消费方
+    expect(isAgentTaskHostReplyMessage({ type: 'init-data', requestId: 'r2' })).toBe(true);
+    expect(isAgentTaskHostReplyMessage({ type: 'webmcp-host-status', requestId: 'r2' })).toBe(false);
+  });
+
+  it('C7 宿主状态守卫：广播/查询/应答结构与非法值', () => {
+    expect(isAgentHostStatusBroadcast({ type: 'webmcp-host-status', status: 'unavailable', occurredAt: 1 })).toBe(true);
+    expect(isAgentHostStatusBroadcast({ type: 'webmcp-host-status', status: 'available', occurredAt: 1 })).toBe(false);
+    expect(isAgentHostStatusBroadcast({ type: 'webmcp-host-status', status: 'unavailable' })).toBe(false);
+    expect(isAgentHostStatusQuery({ type: 'host-status-query' })).toBe(true);
+    expect(isAgentHostStatusQuery({ type: 'other' })).toBe(false);
+    expect(isAgentHostStatusQuery(null)).toBe(false);
+    expect(isAgentHostStatusReply({ type: 'host-status-reply', hostAlive: false })).toBe(true);
+    expect(isAgentHostStatusReply({ type: 'host-status-reply', hostAlive: 'yes' })).toBe(false);
+    expect(isAgentHostStatusReply({ type: 'host-status-reply' })).toBe(false);
   });
 
   it('isTaskTerminalStatus / isAgentTaskErrorCode', () => {

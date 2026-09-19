@@ -13,15 +13,29 @@
 // SW 休眠语义：SW 重启后本模块由 service-worker.ts 顶层重新注册，映射表清空 ——
 // 断开的 Port 会触发页签桥接失联补偿（页面 Promise 落定），不存在跨 SW 生命周期的悬挂状态。
 // cancel-task 为 v2 预留（§3.5）：本期直接回 PROTOCOL_MISMATCH。
+//
+// C6 扩展（init-request）：与 create-task 共用白名单/宿主闸门与 requestPorts 登记，
+// 应答侧「非 ack 即释放」对 init-data 零改动天然生效。
+// C7 扩展（宿主关闭广播 + 存活查询）：
+// - hostPort.onDisconnect 且 hostPort === port（真断开，非后连替换）→ 向数据源已连接
+//   页签广播 webmcp-host-status（getBroadcastTabIds 由 SW 装配注入；reload 误报由 C6
+//   首连即推恢复）；failAllInFlight 保持 guard 外（后连替换场景在途请求仍需补偿——
+//   旧面板已死、新面板无此请求上下文，不补偿即悬挂）。
+// - runtime.onMessage 处理 host-status-query（CS 自检）：isSidePanelAlive 默认
+//   getContexts({contextTypes:['SIDE_PANEL']})，探测异常从严 reply hostAlive=true。
 import {
   AGENT_TASK_HOST_PORT_NAME,
   AGENT_TASK_TAB_PORT_NAME,
   TAB_INVOKE_ALLOWLIST_KEY,
+  isAgentHostStatusQuery,
   isAgentTaskHostReplyMessage,
   isAgentTaskTabMessage,
+  type AgentHostStatusBroadcast,
+  type AgentHostStatusReply,
   type AgentTaskErrorMessage,
   type AgentTaskHostReplyMessage,
   type AgentTaskRoutedCreateMessage,
+  type AgentTaskRoutedInitRequestMessage,
 } from './agent-task-protocol';
 
 /** 页签连接元数据（可信来源 + 该连接的在途请求集合）。 */
@@ -39,12 +53,20 @@ function consumeRuntimeLastError(): string | undefined {
   return chromeGlobal?.runtime?.lastError?.message;
 }
 
+/** 路由依赖（C7：SW 装配注入；测试 stub；缺省零广播/默认探测）。 */
+export interface AgentTaskRouterDeps {
+  /** C7 Q2：广播目标 = 数据源中已经连接的页签（service-worker.ts 由 tab-source-manager 装配）。 */
+  getBroadcastTabIds?: () => number[];
+  /** C7 自检查询的面板存活探测（缺省 getContexts SIDE_PANEL；测试注入 stub）。 */
+  isSidePanelAlive?: () => Promise<boolean>;
+}
+
 /**
  * 启动反调路由（SW 顶层调用一次；每次 SW 唤醒重建监听与映射）。
  *
- * @returns 停止句柄：移除 onConnect / storage 监听并断开全部 Port（测试用）
+ * @returns 停止句柄：移除 onConnect / onMessage / storage 监听并断开全部 Port（测试用）
  */
-export function startAgentTaskRouter(): { stop(): void } {
+export function startAgentTaskRouter(deps: AgentTaskRouterDeps = {}): { stop(): void } {
   const tabs = new Map<chrome.runtime.Port, TabConnection>();
   /** requestId → 发起页签 Port（create-task 转发时登记，终态应答后移除）。 */
   const requestPorts = new Map<string, chrome.runtime.Port>();
@@ -80,6 +102,28 @@ export function startAgentTaskRouter(): { stop(): void } {
     }
   };
 
+  /** C7：宿主真断开 → 向数据源已连接页签广播（无 CS 页签 sendMessage 报 lastError，回调消费吞掉）。 */
+  const broadcastHostUnavailable = (): void => {
+    const tabIds = deps.getBroadcastTabIds?.() ?? [];
+    if (tabIds.length === 0) return;
+    const message: AgentHostStatusBroadcast = {
+      type: 'webmcp-host-status',
+      status: 'unavailable',
+      occurredAt: Date.now(),
+    };
+    const chromeGlobal = (globalThis as {
+      chrome?: { tabs?: { sendMessage: typeof chrome.tabs.sendMessage } };
+    }).chrome;
+    if (!chromeGlobal?.tabs) return;
+    for (const tabId of tabIds) {
+      try {
+        chromeGlobal.tabs.sendMessage(tabId, message, () => consumeRuntimeLastError());
+      } catch {
+        // sendMessage 同步异常（极端场景）：静默，广播是 best-effort
+      }
+    }
+  };
+
   const forgetTab = (port: chrome.runtime.Port): void => {
     const meta = tabs.get(port);
     if (!meta) return;
@@ -103,7 +147,7 @@ export function startAgentTaskRouter(): { stop(): void } {
       } satisfies AgentTaskErrorMessage);
       return;
     }
-    // create-task：白名单闸门（Q5 默认拒绝）→ 宿主可用性 → 注入可信来源转发
+    // init-request（C6 R4）与 create-task 共用闸门：白名单（Q5 默认拒绝）→ 宿主可用性 → 注入可信来源转发
     const reject = (code: AgentTaskErrorMessage['code'], reason: string): void => {
       replyToTab(port, {
         type: 'task-error',
@@ -122,12 +166,11 @@ export function startAgentTaskRouter(): { stop(): void } {
     }
     meta.requests.add(message.requestId);
     requestPorts.set(message.requestId, port);
-    const routed: AgentTaskRoutedCreateMessage = {
-      type: 'create-task',
-      requestId: message.requestId,
-      payload: message.payload,
-      sender: { tabId: meta.tabId, origin: meta.origin },
-    };
+    const sender = { tabId: meta.tabId, origin: meta.origin };
+    const routed: AgentTaskRoutedCreateMessage | AgentTaskRoutedInitRequestMessage =
+      message.type === 'init-request'
+        ? { type: 'init-request', requestId: message.requestId, sender }
+        : { type: 'create-task', requestId: message.requestId, payload: message.payload, sender };
     try {
       hostPort.postMessage(routed);
     } catch (error) {
@@ -170,10 +213,40 @@ export function startAgentTaskRouter(): { stop(): void } {
       });
       port.onDisconnect.addListener(() => {
         consumeRuntimeLastError();
-        if (hostPort === port) hostPort = null;
+        if (hostPort === port) {
+          // 真断开（非后连替换）：宿主上下文已死，广播宿主关闭（C7；reload 误报由 C6 首连即推恢复）
+          hostPort = null;
+          broadcastHostUnavailable();
+        }
+        // guard 外补偿（既有语义）：后连替换场景在途请求同样需补偿——旧面板已死、
+        // 新面板无此请求上下文，跳过补偿即悬挂（propose R2 复核结论，见实施记录）
         failAllInFlight('侧边栏任务宿主已断开（侧栏关闭或扩展重载），任务不可达');
       });
     }
+  };
+
+  /** C7 默认面板存活探测：getContexts(SIDE_PANEL)（Chrome 116+；manifest minimum_chrome_version 已同步）。 */
+  const defaultSidePanelAliveProbe = async (): Promise<boolean> => {
+    const contexts = await chrome.runtime.getContexts({ contextTypes: ['SIDE_PANEL'] });
+    return contexts.length > 0;
+  };
+
+  /** C7 自检查询：CS host-status-relay 经 runtime.sendMessage 查询面板是否存活（可唤醒休眠 SW）。 */
+  const onRuntimeMessage = (
+    message: unknown,
+    _sender: unknown,
+    sendResponse: (response: unknown) => void
+  ): boolean => {
+    if (!isAgentHostStatusQuery(message)) return false;
+    void (deps.isSidePanelAlive ?? defaultSidePanelAliveProbe)()
+      .then((alive) => {
+        sendResponse({ type: 'host-status-reply', hostAlive: alive } satisfies AgentHostStatusReply);
+      })
+      .catch(() => {
+        // 探测异常从严：视为存活（宁可漏报由下次推送/拉取差异感知兜底，不误报断连）
+        sendResponse({ type: 'host-status-reply', hostAlive: true } satisfies AgentHostStatusReply);
+      });
+    return true; // 异步 sendResponse
   };
 
   const refreshAllowlist = async (): Promise<void> => {
@@ -206,12 +279,14 @@ export function startAgentTaskRouter(): { stop(): void } {
   };
 
   chrome.runtime.onConnect.addListener(onConnect);
+  chrome.runtime.onMessage.addListener(onRuntimeMessage);
   void refreshAllowlist();
   chrome.storage.onChanged.addListener(onStorageChange);
 
   return {
     stop: () => {
       chrome.runtime.onConnect.removeListener(onConnect);
+      chrome.runtime.onMessage.removeListener(onRuntimeMessage);
       chrome.storage.onChanged.removeListener(onStorageChange);
       failAllInFlight('任务路由已停止');
       for (const port of tabs.keys()) port.disconnect();

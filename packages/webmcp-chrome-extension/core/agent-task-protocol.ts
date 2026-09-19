@@ -4,6 +4,12 @@
 // 页面（MAIN world SDK）→ content script → service worker → 侧边栏宿主，
 // 让页面能请求扩展侧的 agent / tool 能力。
 //
+// C6 扩展（init-request/init-data）：页签主动拉取初始化数据，无任务语义 ——
+// 不建会话、不进队列、无徽标；复用 create-task 的闸门与转发路径。
+// C7 扩展（webmcp-host-status / host-status-query）：侧栏宿主关闭通知 ——
+// SW 广播（chrome.tabs.sendMessage）与 CS 自检查询（chrome.runtime.sendMessage），
+// 无 requestId、不进下方任何联合（与任务消息完全独立）。
+//
 // 分层红线：
 // - 本模块 = 协议常量 + 线消息类型 + 入参校验纯函数，零 chrome.* 依赖，vitest 直测；
 // - SW 只路由（D4）：来源信息由 SW 注入可信 sender（tabId/origin 取自 chrome 端口，
@@ -11,6 +17,7 @@
 // - 请求/响应以 requestId 关联：页面侧 Promise 在 task-done / task-error 时落定（Q1）。
 //
 // 心跳：CS 每 20s 向 SW 发 heartbeat，维持 SW 不因空闲被回收（长任务期间路由必须存活）。
+import type { AgentInitPayload } from 'webmcp-agent-chat-core';
 
 /** CS → SW 的 Port 名（每个需要发起任务的页签一条长连接）。 */
 export const AGENT_TASK_TAB_PORT_NAME = 'webmcp-agent-task-tab';
@@ -252,17 +259,57 @@ export interface AgentTaskCancelMessage {
   taskId: string;
 }
 
+/** CS → SW：初始化数据拉取请求（C6 R4；无任务语义，宿主直接回 init-data）。 */
+export interface AgentTaskInitRequestMessage {
+  type: 'init-request';
+  requestId: string;
+}
+
+/** SW → 宿主：注入可信来源后的初始化拉取请求（sender 语义同 AgentTaskRoutedCreateMessage）。 */
+export interface AgentTaskRoutedInitRequestMessage extends AgentTaskInitRequestMessage {
+  sender: { tabId: number; origin: string };
+}
+
+/** 宿主 → SW → CS：初始化数据应答（页面侧 Promise 在此落定；无 ack，一跳直达）。 */
+export interface AgentTaskInitDataMessage {
+  type: 'init-data';
+  requestId: string;
+  payload: AgentInitPayload;
+}
+
+// ---- 宿主状态（C7：侧栏关闭通知；无 requestId，不进任何任务消息联合）----
+
+/** SW → CS 的宿主状态广播（chrome.tabs.sendMessage 载荷；CS host-status-relay 消费）。 */
+export interface AgentHostStatusBroadcast {
+  type: 'webmcp-host-status';
+  status: 'unavailable';
+  occurredAt: number;
+}
+
+/** CS → SW 的一次性宿主存活查询（chrome.runtime.sendMessage；自检增强 Q7）。 */
+export interface AgentHostStatusQuery {
+  type: 'host-status-query';
+}
+
+/** SW → CS 查询应答（sendResponse；探测异常从严 hostAlive=true，宁可漏报不误报）。 */
+export interface AgentHostStatusReply {
+  type: 'host-status-reply';
+  hostAlive: boolean;
+}
+
 /** 页面方向线消息联合（CS → SW）。 */
 export type AgentTaskTabMessage =
   | AgentTaskCreateMessage
   | AgentTaskHeartbeatMessage
-  | AgentTaskCancelMessage;
+  | AgentTaskCancelMessage
+  | AgentTaskInitRequestMessage;
 
 /** 宿主方向线消息联合（宿主 → SW → CS）。 */
 export type AgentTaskHostReplyMessage =
   | AgentTaskAckMessage
   | AgentTaskDoneMessage
-  | AgentTaskErrorMessage;
+  | AgentTaskErrorMessage
+  | AgentTaskInitDataMessage;
 
 /** 判定未知值是否为页面方向线消息（结构性最小校验：type + requestId）。 */
 export function isAgentTaskTabMessage(value: unknown): value is AgentTaskTabMessage {
@@ -272,7 +319,8 @@ export function isAgentTaskTabMessage(value: unknown): value is AgentTaskTabMess
   return (
     record['type'] === 'create-task' ||
     record['type'] === 'heartbeat' ||
-    record['type'] === 'cancel-task'
+    record['type'] === 'cancel-task' ||
+    record['type'] === 'init-request'
   );
 }
 
@@ -284,8 +332,35 @@ export function isAgentTaskHostReplyMessage(value: unknown): value is AgentTaskH
   return (
     record['type'] === 'task-ack' ||
     record['type'] === 'task-done' ||
-    record['type'] === 'task-error'
+    record['type'] === 'task-error' ||
+    record['type'] === 'init-data'
   );
+}
+
+/** 判定未知值是否为宿主状态广播（C7：type + status + occurredAt）。 */
+export function isAgentHostStatusBroadcast(value: unknown): value is AgentHostStatusBroadcast {
+  if (typeof value !== 'object' || value === null) return false;
+  const record = value as Record<string, unknown>;
+  return (
+    record['type'] === 'webmcp-host-status' &&
+    record['status'] === 'unavailable' &&
+    typeof record['occurredAt'] === 'number'
+  );
+}
+
+/** 判定未知值是否为宿主存活查询（C7 自检）。 */
+export function isAgentHostStatusQuery(value: unknown): value is AgentHostStatusQuery {
+  return (
+    typeof value === 'object' && value !== null &&
+    (value as Record<string, unknown>)['type'] === 'host-status-query'
+  );
+}
+
+/** 判定未知值是否为宿主存活查询应答（C7 自检）。 */
+export function isAgentHostStatusReply(value: unknown): value is AgentHostStatusReply {
+  if (typeof value !== 'object' || value === null) return false;
+  const record = value as Record<string, unknown>;
+  return record['type'] === 'host-status-reply' && typeof record['hostAlive'] === 'boolean';
 }
 
 // ---- 任务 ID ----

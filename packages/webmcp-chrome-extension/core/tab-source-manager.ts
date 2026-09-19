@@ -428,6 +428,8 @@ interface TabEntry {
 export function startTabSourceManager(options: TabSourceManagerOptions = {}): {
   stop(): void;
   getStatuses(): RelayTabStatus[];
+  /** C7 Q2：数据源中已经连接的页签（state === 'connected'）——宿主关闭广播目标集合。 */
+  getConnectedTabIds(): number[];
   onStatusChange(listener: (statuses: RelayTabStatus[]) => void): () => void;
   /** 当前标签页数据源选择快照（自动模式单选活动页签 / 手动 checkbox 集合）。 */
   getSelection(): RelayTabSelection;
@@ -1045,6 +1047,17 @@ export function startTabSourceManager(options: TabSourceManagerOptions = {}): {
       }
     },
     getStatuses: snapshotStatuses,
+    /**
+     * C7 Q2：数据源中已经连接的页签（state === 'connected'）——
+     * 宿主关闭广播的目标集合。reconnecting 不纳入（漏报由 CS 自检路径兜底）。
+     */
+    getConnectedTabIds: (): number[] => {
+      const out: number[] = [];
+      for (const [tabId, status] of statuses) {
+        if (status.state === 'connected') out.push(tabId);
+      }
+      return out;
+    },
     getSelection,
     setSelection: (tabIds: number[]) => setSelection(tabIds),
     resetSelection: () => resetSelection(),

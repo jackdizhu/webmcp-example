@@ -511,6 +511,38 @@ describe('startTabSourceManager', () => {
     manager.stop();
   });
 
+  it('getConnectedTabIds 仅含 state === connected 的页签（C7 Q2 宿主关闭广播目标）', async () => {
+    const tabsStub = createTabsStub();
+    tabsStub.tabs.set(61, { id: 61, url: 'https://m.com/', title: 'M' });
+    tabsStub.tabs.set(62, { id: 62, url: 'https://n.com/', title: 'N' });
+    const { stubs, factory } = createClientStubFactory();
+    const manager = startTabSourceManager({
+      tabsApi: tabsStub,
+      clientFactory: factory,
+      endpointCache: createMemoryCache(),
+    });
+    tabsStub.activeTabId = 61;
+    tabsStub.emitUpdated(61, { status: 'complete' }, { id: 61, url: 'https://m.com/', title: 'M' });
+    await vi.waitFor(() => expect(stubs).toHaveLength(1));
+
+    // 未连接阶段：空集合
+    expect(manager.getConnectedTabIds()).toEqual([]);
+
+    stubs[0]!.emitStatus(makeStatus({ state: 'connecting' }));
+    expect(manager.getConnectedTabIds()).toEqual([]);
+
+    stubs[0]!.emitStatus(makeStatus({ state: 'connected' }));
+    expect(manager.getConnectedTabIds()).toEqual([61]);
+
+    // dormant / reconnecting / stopped 均不纳入
+    stubs[0]!.emitStatus(makeStatus({ state: 'dormant' }));
+    expect(manager.getConnectedTabIds()).toEqual([]);
+    stubs[0]!.emitStatus(makeStatus({ state: 'connected' }));
+    stubs[0]!.emitStatus(makeStatus({ state: 'reconnecting' }));
+    expect(manager.getConnectedTabIds()).toEqual([]);
+    manager.stop();
+  });
+
   it('标签页释放后状态条目同步移除并推送快照', async () => {
     const tabsStub = createTabsStub();
     tabsStub.tabs.set(41, { id: 41, url: 'https://k.com/', title: 'K' });

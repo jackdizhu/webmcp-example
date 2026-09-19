@@ -1,4 +1,5 @@
 import { connectWebMCPClient } from '../core/content-script';
+import { createHostStatusRelay } from '../core/host-status-relay';
 import { startPageToolsBridge, type PageToolsBridgeHandle } from '../core/page-tools-bridge';
 import { startAgentTaskTabBridge } from '../core/agent-task-tab-bridge';
 import type { Client } from '@modelcontextprotocol/client';
@@ -86,7 +87,21 @@ async function main(): Promise<void> {
   // 进入「探测成功 → 握手失败 → 重连」死循环（实测日志证实）。
   // 桥接请求会等待 clientPromise 落定后执行，握手期间的请求返回明确错误。
   const clientPromise = connectWithRetry();
-  bridge = startPageToolsBridge(clientPromise);
+  // 宿主状态 relay（C7）：先于 bridge 注册 —— SW 广播监听不依赖端口时序；
+  // PAGE_TOOLS Port 全断（侧栏关闭）→ 500ms 后向 SW 自检宿主存活，兜底 SW 休眠
+  // 漏发广播的场景。汇合层自带 2s 去重 + Q3 预检（页面未注册断连工具则跳过）。
+  // 句柄随 content script 生命周期存续，无主动停止场景。
+  const hostStatusRelay = createHostStatusRelay({
+    client: clientPromise,
+    onLog: (level, message) => {
+      if (level === 'warn') console.warn(message);
+      else if (level === 'error') console.error(message);
+      else console.info(message);
+    },
+  });
+  bridge = startPageToolsBridge(clientPromise, {
+    onAllPortsDisconnected: () => hostStatusRelay.notePanelPortsClosed(),
+  });
   // Tab 反调桥接（C5）：同步注册，不依赖 MCP 握手 —— MAIN world SDK 的
   // window.webmcpAgent 请求经此转发 SW 路由；失败不阻断页面工具桥接。
   // 句柄无需保存：桥接随 content script 生命周期存续，无主动停止场景

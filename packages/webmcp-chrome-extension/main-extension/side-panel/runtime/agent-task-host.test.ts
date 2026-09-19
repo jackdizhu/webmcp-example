@@ -8,6 +8,7 @@ import type { StoredChatSession } from '../sessions/session-core';
 import {
   AGENT_TASK_HOST_PORT_NAME,
   type AgentTaskRoutedCreateMessage,
+  type AgentTaskRoutedInitRequestMessage,
 } from '../../../core/agent-task-protocol';
 import { createAgentTaskHost, resolveToolName, type AgentTaskHostDeps } from './agent-task-host';
 
@@ -35,8 +36,8 @@ class StubHostPort {
 
   disconnect(): void {}
 
-  /** 模拟 SW 路由下发 create-task。 */
-  emit(message: AgentTaskRoutedCreateMessage): void {
+  /** 模拟 SW 路由下发行消息（create-task / init-request）。 */
+  emit(message: AgentTaskRoutedCreateMessage | AgentTaskRoutedInitRequestMessage): void {
     for (const fn of this.messageListeners) fn(message);
   }
 }
@@ -85,6 +86,15 @@ function createHarness(): Harness {
     listAgentProfiles: () => [profile],
     listSkillSummaries: () => [skillSummary],
     getGlobalSystemPrompt: () => '全局规则',
+    getInitSnapshot: async (tabId) => ({
+      agents: [profile],
+      activeAgentId: 'a2a-analyst',
+      a2aRefs: [],
+      skills: [skillSummary],
+      tools: tabId === 2
+        ? [{ name: 'tab2__get_document_info', description: 'd2', inputSchema: { type: 'object' } }]
+        : [{ name: 'tab1__echo', description: 'e', inputSchema: { type: 'object' } }],
+    }),
     getLlmBaseConfig: () => ({ apiKey: 'k', baseUrl: 'https://x', model: 'm' }),
     createLlm: () => llm,
     archiveSession: async (session) => {
@@ -114,6 +124,13 @@ const routedCreate = (overrides: Partial<AgentTaskRoutedCreateMessage> = {}): Ag
   type: 'create-task',
   requestId: 'req-1',
   payload: { taskType: 'agent', agentName: '通用智能体', agentPrompt: '读取大纲' },
+  sender: { tabId: 11, origin: 'https://example.com' },
+  ...overrides,
+});
+
+const routedInit = (overrides: Partial<AgentTaskRoutedInitRequestMessage> = {}): AgentTaskRoutedInitRequestMessage => ({
+  type: 'init-request',
+  requestId: 'init-1',
   sender: { tabId: 11, origin: 'https://example.com' },
   ...overrides,
 });
@@ -255,6 +272,59 @@ describe('createAgentTaskHost 受理与终态', () => {
   });
 });
 
+describe('createAgentTaskHost init 拉取（C6）', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    for (const host of activeHosts) host.dispose();
+    activeHosts.length = 0;
+    vi.useRealTimers();
+  });
+
+  it('init-request → getInitSnapshot(调用方 tabId) → init-data 应答；无任务语义（不归档/无 activity）', async () => {
+    const h = createHarness();
+    const seenTabIds: number[] = [];
+    h.deps.getInitSnapshot = async (tabId) => {
+      seenTabIds.push(tabId);
+      return { agents: [profile], activeAgentId: 'a2a-analyst', a2aRefs: [], skills: [skillSummary], tools: [] };
+    };
+    h.port.emit(routedInit());
+    await vi.runAllTimersAsync();
+    expect(seenTabIds).toEqual([11]);
+    expect(h.port.posted).toHaveLength(1);
+    const data = h.port.posted[0] as {
+      type: string;
+      requestId: string;
+      payload: { version: number; currentAgent: unknown; agents: unknown[]; a2aAgents: unknown[]; skills: unknown[] };
+    };
+    expect(data.type).toBe('init-data');
+    expect(data.requestId).toBe('init-1');
+    expect(data.payload.version).toBe(1);
+    expect(data.payload.currentAgent).toEqual({ id: 'a2a-analyst', name: '通用智能体' });
+    expect(data.payload.agents).toEqual([{ id: 'a2a-analyst', name: '通用智能体', description: 'd' }]);
+    expect(data.payload.a2aAgents).toEqual([]);
+    expect(data.payload.skills).toEqual([{ id: 'page-tools-guide', name: '页面工具使用指南', description: 'g' }]);
+    // 无任务语义：不建会话、不触发 activity
+    expect(h.archives).toHaveLength(0);
+    expect(h.activity()).toBe(0);
+  });
+
+  it('getInitSnapshot 异常 → task-error EXECUTION_FAILED（不抛出、不悬挂）', async () => {
+    const h = createHarness();
+    h.deps.getInitSnapshot = async () => {
+      throw new Error('快照组装失败');
+    };
+    h.port.emit(routedInit());
+    await vi.runAllTimersAsync();
+    expect(h.port.posted).toHaveLength(1);
+    const error = h.port.posted[0] as { type: string; code: string };
+    expect(error.type).toBe('task-error');
+    expect(error.code).toBe('EXECUTION_FAILED');
+  });
+});
+
 describe('resolveToolName（Q6 四步解析）', () => {
   const names = ['tab1__echo', 'chrome_extension_get_document_info', 'tab2__get_document_info'];
 
@@ -298,6 +368,7 @@ describe('宿主 Port 连接约定', () => {
         listAgentProfiles: () => [],
         listSkillSummaries: () => [],
         getGlobalSystemPrompt: () => '',
+        getInitSnapshot: async () => ({ agents: [], activeAgentId: null, a2aRefs: [], skills: [], tools: [] }),
         getLlmBaseConfig: () => ({ apiKey: 'k', baseUrl: 'https://x', model: 'm' }),
         archiveSession: async () => {},
         onLog: () => {},

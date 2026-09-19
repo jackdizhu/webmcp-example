@@ -29,6 +29,14 @@ export interface PageToolsClient {
   listTools(): Promise<PageToolMeta[]>;
   /** 调用某个工具（按路由表投递到对应页签）。 */
   callTool(name: string, args: Record<string, unknown>): Promise<unknown>;
+  /**
+   * 指定页签的裸名工具清单（C6 F9 只读 accessor，Q6 推送过滤用）。
+   * 缓存优先；缓存缺失时拉取一次；页签不在目标集合或拉取失败返回空数组
+   * （不可达页签视为无工具，调用方跳过推送）。
+   */
+  listTabToolNames(tabId: number): Promise<string[]>;
+  /** 当前 Port 在线的页签 id 清单（C6 F9 只读 accessor，推送目标过滤用）。 */
+  listConnectedTabIds(): number[];
   /** 更新连接目标页签集合（全局选中页签；新增页签建连、移除页签断开）。 */
   setTargetTabs(tabIds: number[]): void;
   /** 聚合连接状态变化回调（全部目标在线 = true；无目标或任一离线 = false）。 */
@@ -61,6 +69,12 @@ export function attachBuiltinTools(
       return isBuiltinTool(name)
         ? executeBuiltinTool(name, args, context)
         : pageTools.callTool(name, args);
+    },
+    listTabToolNames(tabId) {
+      return pageTools.listTabToolNames(tabId);
+    },
+    listConnectedTabIds() {
+      return pageTools.listConnectedTabIds();
     },
     setTargetTabs(tabIds) {
       pageTools.setTargetTabs(tabIds);
@@ -103,6 +117,12 @@ export function attachInjectedTools(
     },
     callTool(name, args) {
       return deps.handles(name) ? deps.callInjected(name, args) : pageTools.callTool(name, args);
+    },
+    listTabToolNames(tabId) {
+      return pageTools.listTabToolNames(tabId);
+    },
+    listConnectedTabIds() {
+      return pageTools.listConnectedTabIds();
     },
     setTargetTabs(tabIds) {
       pageTools.setTargetTabs(tabIds);
@@ -596,6 +616,25 @@ export function connectPageTools(
       const response = await request(route.conn, { type: 'callTool', name: route.originalName, args });
       if (!response.ok) throw new Error(response.error ?? `调用工具 ${name} 失败`);
       return response.result;
+    },
+
+    async listTabToolNames(tabId: number) {
+      const conn = connections.get(tabId);
+      if (!conn) return [];
+      if (conn.lastTools === null) {
+        try {
+          await listToolsForConn(conn);
+          rebuildRoutes();
+        } catch {
+          // 页签不可达：视为无工具（调用方按 Q6 过滤跳过推送，不视为错误）
+          return [];
+        }
+      }
+      return (conn.lastTools ?? []).map((tool) => tool.name);
+    },
+
+    listConnectedTabIds(): number[] {
+      return [...connections.values()].filter((conn) => conn.connected).map((conn) => conn.tabId);
     },
 
     onStatusChange(listener) {

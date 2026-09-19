@@ -86,10 +86,17 @@ export function serializeToolResult(result: unknown): string {
  *        请求处理会等待 Promise 落定后再执行。这消除了一个关键竞争——SW 侧在导航
  *        complete 时立即 tabs.connect，若接收器要等 MCP 握手（可达数十秒）才注册，
  *        会得到 "Receiving end does not exist" 的死端口，relay 握手随之进入重连循环。
+ * @param hooks 可选钩子。onAllPortsDisconnected：最后一条 PAGE_TOOLS Port 断开时触发
+ *        （C7 CS 自检路径：侧栏关闭 → 面板 Port 全断 → 宿主存活复查）。仅由
+ *        onDisconnect 事件驱动；stop() 主动 disconnect 不触发本端 onDisconnect，
+ *        天然不会误报。
  * @returns 桥接句柄：stop() 停止桥接；notifyToolsChanged() 在页面工具清单
  *          变化（MCP listChanged）时向侧栏广播，弥补纯请求-响应协议无推送的缺口
  */
-export function startPageToolsBridge(client: Client | Promise<Client>): PageToolsBridgeHandle {
+export function startPageToolsBridge(
+  client: Client | Promise<Client>,
+  hooks?: { onAllPortsDisconnected?: () => void }
+): PageToolsBridgeHandle {
   const ports = new Set<chrome.runtime.Port>();
 
   const notifyToolsChanged = (): void => {
@@ -163,6 +170,8 @@ export function startPageToolsBridge(client: Client | Promise<Client>): PageTool
     port.onMessage.addListener((message: unknown) => onMessage(port, message));
     port.onDisconnect.addListener(() => {
       ports.delete(port);
+      // C7：最后一条 Port 断开 = 面板侧已无连接（侧栏关闭/重载），通知自检路径
+      if (ports.size === 0) hooks?.onAllPortsDisconnected?.();
     });
   };
 

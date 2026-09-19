@@ -48,6 +48,34 @@ declare namespace chrome {
     const onInstalled: {
       addListener(callback: (details: { reason: string }) => void): void;
     };
+
+    /** onMessage 监听器签名：返回 true = sendResponse 异步应答（保持消息通道开放）。 */
+    interface OnMessageCallback {
+      (
+        message: unknown,
+        sender: MessageSender,
+        sendResponse: (response: unknown) => void
+      ): boolean | void;
+    }
+
+    /**
+     * 一次性消息监听（C7 自检查询：SW 侧接收 CS 的 host-status-query）。
+     * 仅声明本工程用到的形态；与其他监听器共存时返回值不阻塞他人应答。
+     */
+    const onMessage: {
+      addListener(callback: OnMessageCallback): void;
+      removeListener(callback: OnMessageCallback): void;
+    };
+
+    /**
+     * 发送一次性消息（C7 自检查询：CS → SW；回调形式，无接收者时回调内 lastError 置位）。
+     */
+    function sendMessage(message: unknown, responseCallback: (response: unknown) => void): void;
+
+    /**
+     * 枚举扩展上下文（C7 面板存活探测：getContexts({contextTypes:['SIDE_PANEL']})，Chrome 116+）。
+     */
+    function getContexts(options: { contextTypes: Array<'SIDE_PANEL'> }): Promise<Array<{ id?: string }>>;
   }
 
   namespace tabs {
@@ -92,6 +120,16 @@ declare namespace chrome {
         ) => void
       ): void;
     };
+
+    /**
+     * 向指定页签发送一次性消息（C7 宿主关闭广播：SW → CS host-status-relay）。
+     * 回调形式消费 lastError（页签无接收者 = CS 未注入，广播静默丢弃）。
+     */
+    function sendMessage(
+      tabId: number,
+      message: unknown,
+      responseCallback?: (response: unknown) => void
+    ): void;
 
     /** 标签页关闭事件。 */
     const onRemoved: {

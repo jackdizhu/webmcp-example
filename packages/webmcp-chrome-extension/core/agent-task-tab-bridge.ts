@@ -10,6 +10,10 @@
 // 生命周期：Port 断开（SW 休眠/重载）时在途请求统一补发 task-error
 // （EXTENSION_HOST_UNAVAILABLE），不悬挂页面 Promise；下次请求懒重连。
 // 心跳只在有在途任务时运行 —— 平时零流量，不阻挠 SW 休眠。
+// C6：init-request 与 create-task 同路（pending + 心跳），应答侧零改动。
+// F5 孤儿修复（C7 Q6）：扩展 reload 后旧 CS 的 runtime.connect 同步抛
+// "Extension context invalidated" —— 包 try/catch，孤儿自摘除 window 监听
+// （防与新注入桥接双应答）并 failPending 落定全部在途 Promise（防悬挂）。
 import {
   AGENT_TASK_HEARTBEAT_INTERVAL_MS,
   AGENT_TASK_TAB_PORT_NAME,
@@ -82,7 +86,19 @@ export function startAgentTaskTabBridge(): { stop(): void } {
     if (port !== null) return port;
     const chromeGlobal = (globalThis as { chrome?: { runtime?: { connect: typeof chrome.runtime.connect } } }).chrome;
     if (!chromeGlobal?.runtime) return null;
-    const fresh = chromeGlobal.runtime.connect({ name: AGENT_TASK_TAB_PORT_NAME });
+    let fresh: chrome.runtime.Port;
+    try {
+      fresh = chromeGlobal.runtime.connect({ name: AGENT_TASK_TAB_PORT_NAME });
+    } catch (error) {
+      // F5 孤儿修复：扩展 reload 后旧 CS 上下文已死，connect 同步抛 invalidated。
+      // 异常若从消息监听逃逸 → 请求无应答 + SDK Promise 永久悬挂；新旧桥接并存还会双应答。
+      if (error instanceof Error && /extension context invalidated/i.test(error.message)) {
+        // 本桥接退场：摘除 window 监听（后续请求不再经此转发，由新注入桥接接管）
+        window.removeEventListener('message', onWindowMessage);
+        failPending('EXTENSION_HOST_UNAVAILABLE', '扩展已重载，任务通道失效（刷新页面后恢复）');
+      }
+      return null; // 上层 active === null 兜底回 task-error 落定当前请求
+    }
     fresh.onMessage.addListener((message: unknown) => {
       if (!isAgentTaskHostReplyMessage(message)) return;
       if (message.type !== 'task-ack') {
@@ -111,7 +127,8 @@ export function startAgentTaskTabBridge(): { stop(): void } {
     // 结构守卫只认 type + requestId；source 标记为 SDK 附加字段，宽容放行
     if (!isAgentTaskTabMessage(data)) return;
     if (data.type === 'heartbeat') return; // 心跳由本层生成，页面伪造无意义
-    if (data.type === 'create-task') {
+    if (data.type === 'create-task' || data.type === 'init-request') {
+      // 拉取与任务同路（C6 F4）：入 pending（失联补偿自动覆盖）+ 心跳维持 SW 在线
       pending.add(data.requestId);
       ensureHeartbeat();
     }

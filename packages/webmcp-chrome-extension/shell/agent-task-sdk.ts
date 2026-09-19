@@ -10,6 +10,9 @@
 // Promise 语义（Q1，终态落定）：task-ack 不落定（仅受理回执）；task-done resolve；
 // task-error reject（错误对象带 code 字段，页面按协议错误码分支）。扩展侧失联时
 // 由 content script 桥接补发 task-error（EXTENSION_HOST_UNAVAILABLE），不悬挂。
+// 拉取（C6 R4/Q11-Q12）：asyncAgentInitialization 复用同一 pending 通道，init-data 直接
+// resolve；init 无 ack，SDK 侧 10s 兜底超时防宿主无应答悬挂。
+import type { AgentInitPayload } from 'webmcp-agent-chat-core';
 import {
   isAgentTaskHostReplyMessage,
   type AgentTaskAgentInput,
@@ -37,6 +40,9 @@ export class AgentTaskSdkError extends Error {
 /** 页签反调任务入参（与 core/agent-task-protocol.ts 输入契约同构，类型单点同步）。 */
 export type AgentTaskSdkInput = AgentTaskAgentInput | AgentTaskToolInput;
 
+/** 拉取兜底超时（C6 Q12：宿主无应答/链路断裂时 Promise 必须落定）。 */
+export const AGENT_INITIALIZATION_TIMEOUT_MS = 10_000;
+
 /** window.webmcpAgent 命名空间（扩展 MAIN world SDK 注入；缺失 = 扩展未安装或未含本特性）。 */
 export interface WebMcpAgentSdk {
   /**
@@ -48,6 +54,14 @@ export interface WebMcpAgentSdk {
    * @throws AgentTaskSdkError（带 code）—— 受理前失败（白名单/参数/宿主不可用）或执行失败。
    */
   asyncCreateAgentTask(input: AgentTaskSdkInput): Promise<AgentTaskResultPayload>;
+  /**
+   * 拉取初始化数据（C6 R4：与 web_mcp_agent_initialization 推送载荷同 schema 同白名单；
+   * 返回调用时刻的最新快照）。无任务语义：不建会话、不进队列。
+   *
+   * @returns 初始化载荷 `{ version, pushedAt, currentAgent, agents, a2aAgents, skills, tools }`。
+   * @throws AgentTaskSdkError（带 code）—— 白名单拒绝 / 宿主不可用 / 10s 兜底超时（TASK_TIMED_OUT）。
+   */
+  asyncAgentInitialization(): Promise<AgentInitPayload>;
 }
 
 /** 请求 id：req_<时间戳base36>_<自增>_<6位随机>（本页唯一即可，跨页由宿主重生成 taskId）。 */
@@ -63,9 +77,9 @@ export function installAgentTaskSdk(): void {
   if (window.webmcpAgent) return;
 
   const seq = { value: 0 };
-  /** requestId → 落定器（task-done/task-error 时取用并移除）。 */
+  /** requestId → 落定器（task-done/init-data/task-error 时取用并移除；任务与拉取共用）。 */
   const pending = new Map<string, {
-    resolve: (value: AgentTaskResultPayload) => void;
+    resolve: (value: AgentTaskResultPayload | AgentInitPayload) => void;
     reject: (error: AgentTaskSdkError) => void;
   }>();
 
@@ -90,6 +104,10 @@ export function installAgentTaskSdk(): void {
       });
       return;
     }
+    if (data.type === 'init-data') {
+      waiter.resolve(data.payload);
+      return;
+    }
     waiter.reject(new AgentTaskSdkError(data.code, data.message));
   });
 
@@ -110,12 +128,40 @@ export function installAgentTaskSdk(): void {
           return;
         }
         const requestId = nextRequestId(seq);
-        pending.set(requestId, { resolve, reject });
+        // Map 落定器接受联合类型；本分支只产出任务结果（包装以匹配 resolve 逆变）
+        pending.set(requestId, { resolve: (value) => resolve(value as AgentTaskResultPayload), reject });
         try {
           window.postMessage({ source: SDK_SOURCE, type: 'create-task', requestId, payload }, '*');
         } catch (error) {
           pending.delete(requestId);
           reject(new AgentTaskSdkError('PROTOCOL_MISMATCH', `任务请求发送失败：${error instanceof Error ? error.message : String(error)}`));
+        }
+      });
+    },
+    asyncAgentInitialization() {
+      // 无入参 → 无需结构化克隆预检（Q12：10s 兜底超时，落定即清定时器）
+      return new Promise<AgentInitPayload>((resolve, reject) => {
+        const requestId = nextRequestId(seq);
+        const timer = setTimeout(() => {
+          pending.delete(requestId);
+          reject(new AgentTaskSdkError('TASK_TIMED_OUT', '初始化数据拉取超时（宿主无应答）'));
+        }, AGENT_INITIALIZATION_TIMEOUT_MS);
+        pending.set(requestId, {
+          resolve: (value) => {
+            clearTimeout(timer);
+            resolve(value as AgentInitPayload);
+          },
+          reject: (error) => {
+            clearTimeout(timer);
+            reject(error);
+          },
+        });
+        try {
+          window.postMessage({ source: SDK_SOURCE, type: 'init-request', requestId }, '*');
+        } catch (error) {
+          pending.delete(requestId);
+          clearTimeout(timer);
+          reject(new AgentTaskSdkError('PROTOCOL_MISMATCH', `拉取请求发送失败：${error instanceof Error ? error.message : String(error)}`));
         }
       });
     },

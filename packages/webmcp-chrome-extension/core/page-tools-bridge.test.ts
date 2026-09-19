@@ -5,34 +5,49 @@ import {
   startPageToolsBridge,
 } from './page-tools-bridge';
 
-/** 桥接测试桩：伪造 chrome.runtime.onConnect 与 Port 行为。 */
+/** 桥接测试桩：伪造 chrome.runtime.onConnect 与 Port 行为（支持多条 Port 与手动断开）。 */
 function createHarness() {
   type ConnectListener = (port: unknown) => void;
   const connectListeners = new Set<ConnectListener>();
 
-  type MessageListener = (message: unknown) => void;
-  let messageListener: MessageListener | null = null;
-
   const posted: unknown[] = [];
+  const ports: Array<{ dispatch: (message: unknown) => void; fireDisconnect: () => void }> = [];
 
-  const fakePort = {
-    name: PAGE_TOOLS_PORT_NAME,
-    postMessage: (message: unknown) => {
-      posted.push(message);
-    },
-    disconnect: vi.fn(),
-    onMessage: {
-      addListener: (listener: MessageListener) => {
-        messageListener = listener;
+  const makePort = (name: string) => {
+    type MessageListener = (message: unknown) => void;
+    let messageListener: MessageListener | null = null;
+    let disconnectListener: (() => void) | null = null;
+    const port = {
+      name,
+      postMessage: (message: unknown) => {
+        posted.push(message);
       },
-      removeListener: () => {
-        messageListener = null;
+      disconnect: vi.fn(),
+      onMessage: {
+        addListener: (listener: MessageListener) => {
+          messageListener = listener;
+        },
+        removeListener: () => {
+          messageListener = null;
+        },
       },
-    },
-    onDisconnect: {
-      addListener: () => {},
-      removeListener: () => {},
-    },
+      onDisconnect: {
+        addListener: (listener: () => void) => {
+          disconnectListener = listener;
+        },
+        removeListener: () => {
+          disconnectListener = null;
+        },
+      },
+      dispatch: (message: unknown) => {
+        messageListener?.(message);
+      },
+      fireDisconnect: () => {
+        disconnectListener?.();
+      },
+    };
+    ports.push(port);
+    return port;
   };
 
   (globalThis as unknown as { chrome: unknown }).chrome = {
@@ -45,19 +60,19 @@ function createHarness() {
   };
 
   const connect = (): void => {
-    for (const listener of connectListeners) listener(fakePort);
+    for (const listener of connectListeners) listener(makePort(PAGE_TOOLS_PORT_NAME));
   };
 
   /** 以自定义端口名模拟其他扩展上下文接入。 */
   const connectAs = (name: string): void => {
-    for (const listener of connectListeners) listener({ ...fakePort, name });
+    for (const listener of connectListeners) listener(makePort(name));
   };
 
   const dispatch = (message: unknown): void => {
-    messageListener?.(message);
+    ports[0]?.dispatch(message);
   };
 
-  return { posted, connect, connectAs, dispatch };
+  return { posted, ports, connect, connectAs, dispatch };
 }
 
 const fakeClient = {
@@ -140,5 +155,35 @@ describe('startPageToolsBridge', () => {
     bridge.stop();
     bridge.notifyToolsChanged();
     expect(harness.posted).toHaveLength(1);
+  });
+
+  it('onAllPortsDisconnected：最后一条 Port 断开才触发（C7 自检路径触发源）', () => {
+    const harness = createHarness();
+    let fired = 0;
+    const bridge = startPageToolsBridge(fakeClient, {
+      onAllPortsDisconnected: () => {
+        fired += 1;
+      },
+    });
+    harness.connect();
+    harness.connect();
+    harness.ports[0]?.fireDisconnect();
+    expect(fired).toBe(0);
+    harness.ports[1]?.fireDisconnect();
+    expect(fired).toBe(1);
+    bridge.stop();
+  });
+
+  it('stop() 主动断开端口不触发 onAllPortsDisconnected（非面板关闭信号）', () => {
+    const harness = createHarness();
+    let fired = 0;
+    const bridge = startPageToolsBridge(fakeClient, {
+      onAllPortsDisconnected: () => {
+        fired += 1;
+      },
+    });
+    harness.connect();
+    bridge.stop();
+    expect(fired).toBe(0);
   });
 });

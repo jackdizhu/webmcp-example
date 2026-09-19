@@ -1,6 +1,8 @@
 /// <reference types="@mcp-b/webmcp-types" />
 import { initializeWebMCPPolyfill } from '@mcp-b/webmcp-polyfill';
 import { createGetStatusTool } from './tools/get-status';
+import { createAgentInitializationTool } from './tools/agent-init';
+import { createAgentDisconnectTool } from './tools/agent-disconnect';
 import { buildOrderFormDemo } from './demo/order-form';
 import { buildAgentTaskTestPanel } from './agent-task-test';
 
@@ -64,11 +66,22 @@ function describeError(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
+/** 通道事件广播（C6/C7）：初始化推送与宿主断连通知转 window CustomEvent（联调面板订阅展示）。 */
+function broadcastAgentChannelEvent(type: 'webmcp-agent-init-push' | 'webmcp-agent-disconnect', detail: unknown): void {
+  window.dispatchEvent(new CustomEvent(type, { detail }));
+}
+
 /** 同步按钮可用性与状态文案（每次注册/注销前后各刷一次）。 */
 function renderState(): void {
   const registered = registrationController !== null;
-  // get_status + form_get_schema / form_fill_fields / form_get_values / form_submit / query_table_data
-  const toolNames = ['get_status', ...formTools.map((tool) => tool.name)];
+  // get_status + web_mcp_agent_initialization / web_mcp_agent_disconnect
+  // + form_get_schema / form_fill_fields / form_get_values / form_submit / query_table_data
+  const toolNames = [
+    'get_status',
+    'web_mcp_agent_initialization',
+    'web_mcp_agent_disconnect',
+    ...formTools.map((tool) => tool.name),
+  ];
   statusText.textContent = registered
     ? `已注册 ${toolNames.length} 个工具：${toolNames.join('、')}`
     : '当前未注册任何工具（AI 与侧栏 tools 列表不可见）';
@@ -89,6 +102,20 @@ async function registerAllTools(): Promise<void> {
   try {
     // 既有示例工具（工厂每次产新定义，规避任何跨批次状态残留）
     await modelContext.registerTool(createGetStatusTool(), { signal: controller.signal });
+    // 通道协议工具（C6/C7）：宿主推送初始化数据 / 宿主关闭通知的页面侧落点。
+    // 扩展侧不会把这两个名字放进 LLM 工具清单（agent 面双清单过滤），仅协议面使用。
+    await modelContext.registerTool(
+      createAgentInitializationTool({
+        onInitialization: (payload) => broadcastAgentChannelEvent('webmcp-agent-init-push', payload),
+      }),
+      { signal: controller.signal }
+    );
+    await modelContext.registerTool(
+      createAgentDisconnectTool({
+        onDisconnect: (payload) => broadcastAgentChannelEvent('webmcp-agent-disconnect', payload),
+      }),
+      { signal: controller.signal }
+    );
     for (const tool of formTools) {
       await modelContext.registerTool(tool, { signal: controller.signal });
     }

@@ -13,12 +13,14 @@ import {
   createChatController,
   createSkillResolver,
   createSkillToolDefinition,
+  excludeAgentChannelTools,
   mergeLlmConfig,
   parseSkillToolArgs,
   SKILL_TOOL_NAME,
   toSkillToolError,
   toSkillToolResult,
   type AgentA2aRef,
+  type AgentInitSnapshot,
   type AgentLoopEvent,
   type SkillSummary,
 } from 'webmcp-agent-chat-core';
@@ -27,6 +29,7 @@ import { loadA2aConfig, saveA2aConfig, toA2aConfigSnapshot } from './a2a/a2a-con
 import { createAgentProfileStore } from './a2a/agent-profile-store';
 import { initLocale, joinList, t } from './i18n';
 import { createHostSkillSource, getBuiltinSkillSummary, BUILTIN_SKILLS } from './runtime/skill-assets';
+import { createAgentInitPusher } from './runtime/agent-init-pusher';
 import { createAgentTaskHost } from './runtime/agent-task-host';
 import { composeHandoffMessage, type DebugRun } from './runtime/debugger-core';
 import {
@@ -315,17 +318,46 @@ export const App = defineComponent({
     // 任务与手打对话并行（Q11：无 busy 互斥）；终止按当前展示会话分派（Q13）。
     // 宿主为 Vue-free 运行时模块：活跃状态经 onTaskActivity 版本号驱动 computed 重算。
     const taskActivityVersion = ref(0);
+    /**
+     * 初始化快照组装缝（C6 F8）：拉取路径（宿主 init-request）与推送路径（pusher）
+     * 共用。tools 按页签裁剪 —— 该页签暴露名（tab<tabId>__*）还原为裸名 + 非页签
+     * 命名空间的全局工具（内置/注入）；页面 agent 只见自己页签的工具，回调经 Q6
+     * 第 2 步（调用方页签前缀）解析回宿主。
+     */
+    const getInitSnapshot = async (tabId: number): Promise<AgentInitSnapshot> => {
+      if (!pageTools) throw new Error('页面工具客户端未就绪');
+      const all = await pageTools.listTools();
+      const prefix = `tab${tabId}__`;
+      const tabNamespace = /^tab\d+__/;
+      const tools = all
+        .filter((tool) => tool.name.startsWith(prefix) || !tabNamespace.test(tool.name))
+        .map((tool) => ({
+          name: tool.name.startsWith(prefix) ? tool.name.slice(prefix.length) : tool.name,
+          description: tool.description,
+          inputSchema: tool.inputSchema,
+        }));
+      return {
+        agents: profileStore.agents.value,
+        activeAgentId: profileStore.activeAgentId.value,
+        a2aRefs: a2aConfig.value,
+        skills: BUILTIN_SKILLS,
+        tools,
+      };
+    };
     const agentTaskHost = createAgentTaskHost({
       listTools: async () => {
         if (!pageTools) throw new Error('页面工具客户端未就绪');
         const tools = await pageTools.listTools();
         toolsCount.value = tools.length;
-        return tools;
+        // 通道工具（initialization/disconnect）是协议面工具，不进任务/LLM 工具清单
+        return excludeAgentChannelTools(tools);
       },
       callTool: async (name, args) => {
         if (!pageTools) throw new Error('页面工具客户端未就绪');
         return pageTools.callTool(name, args);
       },
+      // C6 拉取路径：init-request → 组装载荷直接应答（无任务语义）
+      getInitSnapshot,
       listAgentProfiles: () => profileStore.agents.value,
       listSkillSummaries: () => BUILTIN_SKILLS,
       getGlobalSystemPrompt: () => settings.systemPrompt,
@@ -348,6 +380,26 @@ export const App = defineComponent({
       void taskActivityVersion.value; // 任务受理/终态时版本自增，触发重算
       return agentTaskHost.isTaskSession(activeSessionId.value);
     });
+
+    // ---- 初始化数据推送器（C6 推送路径）----
+    // 面板侧相关状态变化 → 500ms 去抖 → 向已连接且注册了初始化工具的页签推送最新载荷。
+    // 订阅源：智能体档案（含 rules/技能开关等深变化）、激活智能体、A2A 配置；
+    // 工具清单变化与页签连接变化在 onMounted 的 onToolsChange/onStatusChange 回调里 schedule。
+    const agentInitPusher = createAgentInitPusher({
+      listConnectedTabs: () => pageTools?.listConnectedTabIds() ?? [],
+      getTabToolNames: async (tabId) => pageTools?.listTabToolNames(tabId) ?? [],
+      callTool: async (name, args) => {
+        if (!pageTools) throw new Error('页面工具客户端未就绪');
+        return pageTools.callTool(name, args);
+      },
+      getInitSnapshot,
+      onLog: (level, event, payload) => logEvent(level, 'tasks', event, payload),
+    });
+    watch(
+      [profileStore.agents, profileStore.activeAgentId, a2aConfig],
+      () => agentInitPusher.schedule(),
+      { deep: true }
+    );
 
     const pushUiMessage = (
       role: UiMessage['role'],
@@ -443,10 +495,10 @@ export const App = defineComponent({
       getTools: async () => {
         // 每轮发送前刷新工具清单，保证页面工具变化（listChanged）能被感知；
         // 清单 = 页面工具 + 内置工具（attachBuiltinTools）+ 注入工具（attachInjectedTools：
-        // __agent_load_skill / a2a__*，与调试页同源）
+        // __agent_load_skill / a2a__*，与调试页同源）；通道协议工具不进 LLM 清单（C6）
         const tools = await pageTools!.listTools();
         toolsCount.value = tools.length;
-        return tools;
+        return excludeAgentChannelTools(tools);
       },
       callTool: async (name, args) => {
         // 注入工具（skill / a2a）由 attachInjectedTools 层路由（与调试页同一路径），
@@ -662,10 +714,14 @@ export const App = defineComponent({
         logEvent(value ? 'info' : 'warn', 'bridge', value ? 'bridge_connected' : 'bridge_disconnected');
         // 恢复在线即刷新清单：挂载时桥接往往未就绪，首次拉取会失败停在 0
         if (!wasConnected && value) void refreshTools();
+        // 页签连接恢复 → 新页签可能需要初始化载荷（C6 推送）
+        agentInitPusher.schedule();
       });
       // 页面动态注册/注销工具（桥接 toolsChanged 推送）时同步侧栏展示
       unsubscribeToolsChange = pageTools.onToolsChange(() => {
         void refreshTools();
+        // 工具清单变化（页面注册/注销初始化工具）→ 推送最新载荷（C6）
+        agentInitPusher.schedule();
       });
 
       // relay 连接客户端创建 + store 三路订阅绑定：状态栏 / 数据源设置页 / 调用日志页
@@ -692,6 +748,7 @@ export const App = defineComponent({
     onUnmounted(() => {
       unsubscribeStatus?.();
       unsubscribeToolsChange?.();
+      agentInitPusher.dispose();
       relayStore.dispose();
       relayStatusClient?.disconnect();
       agentTaskHost.dispose();

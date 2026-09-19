@@ -119,6 +119,19 @@ export {
   type AgentTaskRunResult,
 } from './agent-task-runner';
 export {
+  AGENT_INITIALIZATION_TOOL_NAME,
+  AGENT_DISCONNECT_TOOL_NAME,
+  AGENT_CHANNEL_TOOL_NAMES,
+  stripTabToolPrefix,
+  isAgentChannelTool,
+  excludeAgentChannelTools,
+  buildAgentInitPayload,
+  buildAgentDisconnectPayload,
+  type AgentInitSnapshot,
+  type AgentInitPayload,
+  type AgentDisconnectPayload,
+} from './agent-init';
+export {
   DEFAULT_ACTIVE_AGENT_ID,
   LEGACY_DEFAULT_AGENT_ID,
   composeSystemPrompt,

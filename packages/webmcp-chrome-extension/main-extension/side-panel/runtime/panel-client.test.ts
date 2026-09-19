@@ -490,6 +490,8 @@ describe('attachBuiltinTools 内置工具合成', () => {
         calls.push({ name, args });
         return { fromPage: name };
       },
+      listTabToolNames: async () => tools.map((tool) => tool.name),
+      listConnectedTabIds: () => [],
       setTargetTabs,
       onStatusChange: (listener) => {
         statusListeners.push(listener);

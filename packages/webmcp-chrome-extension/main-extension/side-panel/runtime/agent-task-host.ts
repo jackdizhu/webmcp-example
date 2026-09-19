@@ -9,7 +9,9 @@
 // - 会话集成：任务开始即以 running 状态归档（Q12），终态覆写归档；
 //   origin/taskStatus 写入 StoredChatSession（SessionList 徽标数据源）；
 // - 终止分派（Q13）：terminateTask(sessionId) 由 App 在「当前展示会话 = 运行中任务」时调用；
-// - 超时（Q9）：agent 任务 10 分钟、tool 任务 30 秒 → 终态 failed（result.code = TASK_TIMED_OUT）。
+// - 超时（Q9）：agent 任务 10 分钟、tool 任务 30 秒 → 终态 failed（result.code = TASK_TIMED_OUT）；
+// - init 拉取（C6）：init-request 直接应答 init-data，无任务语义 —— 不建会话、不进队列、
+//   无徽标；载荷经 chat-core buildAgentInitPayload 统一组装（与推送路径同源）。
 //
 // 隔离红线（§4.6）：不触碰 trace-context 模块级单值（setCurrentTrace 属手打对话轮）；
 // 不写 lastSkillLabel 缝；任务日志以 taskId 贯穿（onLog → logEvent 'tasks' 域）。
@@ -23,18 +25,21 @@ import {
   type AgentTaskHostReplyMessage,
   type AgentTaskInput,
   type AgentTaskRoutedCreateMessage,
+  type AgentTaskRoutedInitRequestMessage,
   type TaskTerminalStatus,
 } from '../../../core/agent-task-protocol';
 import { serializeToolResult } from '../../../core/page-tools-bridge';
 import {
   AgentAbortError,
   AgentTaskRunnerError,
+  buildAgentInitPayload,
   createLlmClient,
   mergeLlmConfig,
   resolveAgentProfile,
   resolveSkillSummary,
   runAgentTask,
   type AgentLoopEvent,
+  type AgentInitSnapshot,
   type AgentProfile,
   type AgentTool,
   type ChatMessage,
@@ -67,6 +72,11 @@ export interface AgentTaskHostDeps {
   listSkillSummaries: () => readonly SkillSummary[];
   /** 全局 rules 提示词（settings.systemPrompt）。 */
   getGlobalSystemPrompt: () => string;
+  /**
+   * 初始化快照组装缝（C6）：按调用方 tabId 返回快照（App 侧按页签裁剪 tools），
+   * 仅 init 拉取/推送使用，不触碰任务链；载荷由宿主经 buildAgentInitPayload 统一组装。
+   */
+  getInitSnapshot: (tabId: number) => Promise<AgentInitSnapshot>;
   /** LLM 基础配置（全局 settings；per-agent llmOverride 由宿主内部 mergeLlmConfig）。 */
   getLlmBaseConfig: () => LlmConfig;
   /** LLM 客户端工厂（缺省 createLlmClient；单测注入桩用）。 */
@@ -104,6 +114,17 @@ function isRoutedCreate(value: unknown): value is AgentTaskRoutedCreateMessage {
   if (typeof value !== 'object' || value === null) return false;
   const record = value as Record<string, unknown>;
   if (record['type'] !== 'create-task' || typeof record['requestId'] !== 'string') return false;
+  const sender = record['sender'];
+  if (typeof sender !== 'object' || sender === null) return false;
+  const s = sender as Record<string, unknown>;
+  return typeof s['tabId'] === 'number' && typeof s['origin'] === 'string';
+}
+
+/** SW → 宿主 init-request 的结构守卫（C6；sender 语义同 isRoutedCreate）。 */
+function isRoutedInitRequest(value: unknown): value is AgentTaskRoutedInitRequestMessage {
+  if (typeof value !== 'object' || value === null) return false;
+  const record = value as Record<string, unknown>;
+  if (record['type'] !== 'init-request' || typeof record['requestId'] !== 'string') return false;
   const sender = record['sender'];
   if (typeof sender !== 'object' || sender === null) return false;
   const s = sender as Record<string, unknown>;
@@ -509,12 +530,29 @@ export function createAgentTaskHost(
     }
   };
 
+  /** 处理 init-request（C6 拉取路径）：组装载荷直接应答 init-data，无任务语义。 */
+  const handleInitRequest = async (routed: AgentTaskRoutedInitRequestMessage): Promise<void> => {
+    try {
+      const snapshot = await deps.getInitSnapshot(routed.sender.tabId);
+      reply({ type: 'init-data', requestId: routed.requestId, payload: buildAgentInitPayload(snapshot) });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      deps.onLog('error', 'agent_init_fetch_failed', { tabId: routed.sender.tabId, error: message });
+      failRequest(routed.requestId, 'EXECUTION_FAILED', '初始化数据组装失败，请稍后重试');
+    }
+  };
+
   const connect = (): void => {
     if (disposed) return;
     const fresh = portFactory();
     fresh.onMessage.addListener((message: unknown) => {
-      if (!isRoutedCreate(message)) return;
-      acceptTask(message);
+      if (isRoutedCreate(message)) {
+        acceptTask(message);
+        return;
+      }
+      if (isRoutedInitRequest(message)) {
+        void handleInitRequest(message);
+      }
     });
     fresh.onDisconnect.addListener(() => {
       consumeRuntimeLastError();
