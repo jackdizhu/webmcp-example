@@ -50,3 +50,25 @@ export {
   type LlmConfig,
   type LlmLogFn,
 } from './loop/llm-client';
+export {
+  appendLog,
+  createCallLogger,
+  type CallLogger,
+} from './logging/call-logger';
+export {
+  computeRotateCount,
+  truncateContent,
+  MAX_CONTENT_LENGTH,
+  MAX_LOG_RECORDS,
+  ROTATE_MARGIN,
+} from './logging/logger-core';
+export {
+  createLazyLogStorage,
+  createLoggerDb,
+  openLoggerDb,
+} from './logging/logger-db';
+export type {
+  CallLogEntry,
+  CallLogPhase,
+  LogStorage,
+} from './logging/logger-types';

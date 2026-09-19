@@ -7,6 +7,8 @@
 // 用最小结构化类型声明 worker 作用域（仅 onmessage / postMessage）。
 import { createWorkerHandle } from './handle';
 import type { WorkerToMainMessage } from '../protocol';
+import { createLazyLogStorage } from '../logging/logger-db';
+import type { LogStorage } from '../logging/logger-types';
 import type { LlmLogFn } from '../loop/llm-client';
 
 /** 最小结构化 worker 作用域（ DedicatedWorkerGlobalScope 的消费子集）。 */
@@ -21,11 +23,14 @@ export interface WebAgentWorkerScope {
  * @param scope worker 全局作用域（缺省 self；测试注入桩）
  * @param fetchImpl fetch 实现（缺省 self.fetch 解构后裸标识符持有，规避 Illegal invocation）
  * @param onLog 日志钩子（缺省 no-op；payload 不含鉴权数据）
+ * @param logStorage 调用日志存储（缺省接入 IndexedDB 懒加载库：
+ *   首条日志写入时才打开，无 IndexedDB 环境首次失败后自动降级停用并 console.warn 一次）
  */
 export function startWebAgentWorker(
   scope: WebAgentWorkerScope = self as unknown as WebAgentWorkerScope,
   fetchImpl: typeof fetch = self.fetch,
-  onLog: LlmLogFn = () => {}
+  onLog: LlmLogFn = () => {},
+  logStorage?: LogStorage
 ): void {
   const handle = createWorkerHandle({
     post: (message: WorkerToMainMessage) => {
@@ -33,6 +38,11 @@ export function startWebAgentWorker(
     },
     fetchImpl,
     onLog,
+    logStorage:
+      logStorage ??
+      createLazyLogStorage((error) => {
+        console.warn('web-agent-worker 调用日志库不可用，已停用落库', error);
+      }),
   });
   scope.onmessage = (event: { data: unknown }) => {
     handle.handleMessage(event.data);

@@ -86,11 +86,20 @@ export interface WebAgentClient {
   terminate(): void;
 }
 
-/** 生成递增 requestId（client 进程内唯一即可）。 */
+/** 全局递增序号（requestId 唯一性兜底）。 */
 let requestSeq = 0;
-function nextRequestId(): string {
+
+/**
+ * 生成 requestId（client 进程内唯一：时间戳 + 全局序号 + 任务类型三重保证）。
+ *
+ * 定义：`wa-req-<毫秒时间戳>-<全局递增序号>-<agent | tool>`。
+ * 举例：wa-req-1789799626069-1-agent（agent 任务）；wa-req-1789799626069-2-tool（chat 直调）。
+ * 详细：序号兜底同毫秒并发唯一性（构造保证，不依赖概率）；类型段让日志/取消
+ * 可直观区分 run-agent 任务与 chat 直调。
+ */
+function nextRequestId(kind: 'agent' | 'tool'): string {
   requestSeq += 1;
-  return `wa-req-${requestSeq}`;
+  return `wa-req-${Date.now()}-${requestSeq}-${kind}`;
 }
 
 /**
@@ -227,7 +236,7 @@ export function createWebAgentClient(deps: {
 
   return {
     chat(input, options = {}) {
-      const requestId = nextRequestId();
+      const requestId = nextRequestId('tool');
       const format = options.format ?? 'json';
       return new Promise<WebAgentChatResult>((resolve, reject) => {
         pending.set(requestId, {
@@ -239,7 +248,7 @@ export function createWebAgentClient(deps: {
       });
     },
     runAgent(input, options = {}) {
-      const requestId = nextRequestId();
+      const requestId = nextRequestId('agent');
       // 注意：worker 收到的 tools 仅为定义（WebAgentTempToolDef）；execute 留在主线程注册表
       const toolDefs: WebAgentTempToolDef[] = (options.tools ?? []).map((tool) => ({
         name: tool.name,

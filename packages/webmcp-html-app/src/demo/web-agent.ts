@@ -6,6 +6,7 @@
 // Worker 内存中的 Authorization 头，不落日志。
 import {
   createWebAgentClient,
+  openLoggerDb,
   WebAgentRequestError,
   type WebAgentClient,
   type WebAgentWorkerConfig,
@@ -26,17 +27,28 @@ function el(tag: string, className?: string, text?: string): HTMLElement {
   return node;
 }
 
-/** 示例临时回调工具：返回当前页面概要（execute 在主线程执行）。 */
+/** 示例临时回调工具：返回当前页面概要（execute 在主线程执行；timestamp 为模型必填入参）。 */
 function buildPageInfoTool(): WebAgentTempTool {
   return {
     name: 'get_page_info',
-    description: '返回当前页面的标题与可见工具数量（用于让模型了解页面上下文）',
-    inputSchema: { type: 'object', properties: {}, additionalProperties: false },
-    execute: async () => ({
-      title: document.title,
-      url: location.pathname,
-      timestamp: new Date().toISOString(),
-    }),
+    description: '返回当前页面的标题与可见工具数量（用于让模型了解页面上下文）；调用时必须传入 timestamp 参数',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        timestamp: { type: 'string', description: '调用时间戳（ISO 8601 字符串，如 2026-09-19T10:00:00Z）' },
+      },
+      required: ['timestamp'],
+      additionalProperties: false,
+    },
+    execute: async (args) => {
+      // schema 已声明必填；运行时兜底：模型未传时回退当前时间，避免输出 undefined
+      const timestamp = typeof args.timestamp === 'string' ? args.timestamp : new Date().toISOString();
+      return {
+        title: document.title,
+        url: location.pathname,
+        timestamp,
+      };
+    },
   };
 }
 
@@ -123,6 +135,7 @@ export function buildWebAgentDemo(root: HTMLElement): void {
     <div class="wa-actions">
       <button type="button" id="wa-init-btn">初始化 / 重建 Worker</button>
       <button type="button" id="wa-stop-btn" disabled>停止全部任务</button>
+      <button type="button" id="wa-export-logs-btn" title="导出 Worker 调用日志（IndexedDB，滚动保留最近 200 条）">导出调用日志</button>
       <span id="wa-status" class="wa-status"></span>
     </div>
 
@@ -188,6 +201,34 @@ export function buildWebAgentDemo(root: HTMLElement): void {
   stopBtn.addEventListener('click', () => {
     client?.cancel(); // 无参 = 终止全部在途（chat + agent）
     statusText.textContent = '已发送停止指令（正在执行的工具等待完成后停止）';
+  });
+
+  // ---- 调用日志导出 ----
+  const exportLogsBtn = root.querySelector<HTMLButtonElement>('#wa-export-logs-btn')!;
+
+  /** 导出 IndexedDB 调用日志为 JSON 文件（与 Worker 同源，直接读日志库；导出用）。 */
+  async function exportCallLogs(): Promise<void> {
+    exportLogsBtn.disabled = true;
+    try {
+      const storage = await openLoggerDb();
+      const entries = await storage.readAll();
+      const blob = new Blob([JSON.stringify(entries, null, 2)], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
+      const anchor = document.createElement('a');
+      anchor.href = url;
+      anchor.download = `web-agent-call-logs-${new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-')}.json`;
+      anchor.click();
+      URL.revokeObjectURL(url);
+      statusText.textContent = `已导出 ${entries.length} 条调用日志`;
+    } catch (error) {
+      statusText.textContent = `导出失败：${error instanceof Error ? error.message : String(error)}`;
+    } finally {
+      exportLogsBtn.disabled = false;
+    }
+  }
+
+  exportLogsBtn.addEventListener('click', () => {
+    void exportCallLogs();
   });
 
   // ---- chat 直调 ----

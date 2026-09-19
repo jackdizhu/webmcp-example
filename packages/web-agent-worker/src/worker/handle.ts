@@ -10,6 +10,9 @@
 // - cancel：按 requestId 精确 abort（省略 = 全部在途），终态统一 error(cancelled)。
 import { createDifyClient, type DifyClient } from '../dify/dify-client';
 import { buildDifyChatTool, type DifyChatTool } from '../dify/dify-tool';
+import { createCallLogger, type CallLogger } from '../logging/call-logger';
+import { truncateContent } from '../logging/logger-core';
+import type { CallLogEntry, CallLogPhase, LogStorage } from '../logging/logger-types';
 import { AgentAbortError, runAgentLoop, type AgentTool, type LlmChatClient } from '../loop/agent-loop';
 import { createLlmClient, type LlmConfig, type LlmLogFn } from '../loop/llm-client';
 import type {
@@ -31,11 +34,13 @@ export const AGENT_BUSY_MESSAGE = `已有 ${AGENT_MAX_CONCURRENCY} 个智能体�
 
 const noopLog: LlmLogFn = () => {};
 
-/** worker 侧依赖（post 为发往主线程的出口；fetchImpl/onLog 注入便于测试）。 */
+/** worker 侧依赖（post 为发往主线程的出口；fetchImpl/onLog/logStorage 注入便于测试）。 */
 export interface WorkerHandleDeps {
   post: (message: WorkerToMainMessage) => void;
   fetchImpl: typeof fetch;
   onLog?: LlmLogFn | undefined;
+  /** 调用日志存储（缺省未接入，日志器为 no-op 零开销）。 */
+  logStorage?: LogStorage | undefined;
 }
 
 /** 临时工具等待回执的挂起项（tool-result 晚到按 toolCallId 出表忽略）。 */
@@ -82,6 +87,24 @@ export function createWorkerHandle(deps: WorkerHandleDeps): {
   handleMessage: (raw: unknown) => void;
 } {
   const onLog = deps.onLog ?? noopLog;
+  // 调用日志器：logStorage 未注入时为 no-op（record 内部吞错，落库失败不影响主流程）
+  const callLogger: CallLogger = createCallLogger(deps.logStorage);
+  /** 记录一条调用日志（记录请求/响应实际内容，超 8000 字符截断；api-key 等鉴权数据不落日志）。 */
+  function recordCallLog(
+    requestId: string,
+    phase: CallLogPhase,
+    payload: Record<string, unknown>,
+    durationMs?: number
+  ): void {
+    const entry: CallLogEntry = {
+      requestId,
+      phase,
+      ts: Date.now(),
+      payload,
+      ...(durationMs !== undefined ? { durationMs } : {}),
+    };
+    callLogger.record(entry);
+  }
   // fetchImpl 解构为裸标识符（对齐 dify-client 注释：规避 WebIDL Illegal invocation）
   const fetchImpl = deps.fetchImpl;
   const post = deps.post;
@@ -125,6 +148,10 @@ export function createWorkerHandle(deps: WorkerHandleDeps): {
     const runtime: ChatRuntime = { controller: new AbortController() };
     chatRuntimes.set(requestId, runtime);
     const startedAt = Date.now();
+    recordCallLog(requestId, 'chat_request', {
+      query: truncateContent(input.query),
+      ...(Object.keys(input.inputs ?? {}).length > 0 ? { inputs: input.inputs } : {}),
+    });
     try {
       // inputs 合并策略（Q2 定案）：调用级整体覆盖，否则回退配置级，再回退空
       const chatResult = await difyClient.chat(
@@ -162,20 +189,28 @@ export function createWorkerHandle(deps: WorkerHandleDeps): {
             : {}),
         }
       );
+      const durationMs = Date.now() - startedAt;
+      recordCallLog(requestId, 'chat_done', {
+        ...(chatResult.conversationId !== undefined ? { conversationId: chatResult.conversationId } : {}),
+        answer: truncateContent(chatResult.answer),
+      }, durationMs);
       post({
         kind: 'done',
         requestId,
         taskKind: 'chat',
         answer: chatResult.answer,
         ...(chatResult.conversationId !== undefined ? { conversationId: chatResult.conversationId } : {}),
-        durationMs: Date.now() - startedAt,
+        durationMs,
       });
     } catch (error) {
+      const code = toErrorCode(error, runtime.controller);
+      const message = error instanceof Error ? error.message : String(error);
+      recordCallLog(requestId, 'chat_error', { code, message });
       post({
         kind: 'error',
         requestId,
-        code: toErrorCode(error, runtime.controller),
-        message: error instanceof Error ? error.message : String(error),
+        code,
+        message,
       });
     } finally {
       chatRuntimes.delete(requestId);
@@ -189,6 +224,8 @@ export function createWorkerHandle(deps: WorkerHandleDeps): {
     name: string,
     args: Record<string, unknown>
   ): Promise<unknown> {
+    // tool_start 日志在执行漏斗记录（dify / 临时工具共同入口，args 已解析为对象，结构化落库）
+    recordCallLog(requestId, 'tool_start', { name, args });
     const difyTool = difyTools.find((tool) => tool.tool.name === name);
     if (difyTool !== undefined) return difyTool.execute(args);
 
@@ -225,12 +262,27 @@ export function createWorkerHandle(deps: WorkerHandleDeps): {
     const { requestId } = message;
     const input: WebAgentRunAgentInput = message.input;
     const activeConfig = config as WebAgentWorkerConfig;
+    const startedAt = Date.now();
+    // llm_call 迭代计数（装饰器内自增，每次 complete = 一轮调用）
+    let llmIteration = 0;
+    // LlmChatClient 装饰器：llm_call 日志在此记录完整请求内容（messages 逐条截断 8000），协议面不变
+    const loggingLlm: LlmChatClient = {
+      complete: async (messages, tools, signal) => {
+        llmIteration += 1;
+        recordCallLog(requestId, 'llm_call', {
+          iteration: llmIteration,
+          messages: messages.map((msg) => ({ ...msg, content: truncateContent(msg.content) })),
+          toolCount: tools.length,
+        });
+        return (llmClient as LlmChatClient).complete(messages, tools, signal);
+      },
+    };
     try {
       const result = await runAgentLoop({
         history: input.history ?? [{ role: 'user', content: input.message }],
         tools: taskTools,
         deps: {
-          llm: llmClient as LlmChatClient,
+          llm: loggingLlm,
           // 每轮 LLM 调用前取最新清单：临时工具超时移除后 LLM 后续迭代视野内消失
           listTools: (): readonly AgentTool[] => [
             ...difyTools.map((tool) => tool.tool),
@@ -247,16 +299,34 @@ export function createWorkerHandle(deps: WorkerHandleDeps): {
           signal: runtime.controller.signal,
           onEvent: (event) => {
             post({ kind: 'agent-event', requestId, event });
+            // tool_result / tool_error 日志在事件侧记录（内容仅在事件中可得）；
+            // llm_call 与 tool_start 日志分别由 llm 装饰器与工具执行漏斗记录（含完整内容）
+            switch (event.type) {
+              case 'tool_result':
+                recordCallLog(requestId, 'tool_result', { name: event.name, result: truncateContent(event.result) });
+                break;
+              case 'tool_error':
+                recordCallLog(requestId, 'tool_error', { name: event.name, error: event.error });
+                break;
+            }
           },
         },
       });
+      recordCallLog(requestId, 'agent_done', {
+        text: truncateContent(result.text),
+        // 完整对话记录（含 assistant tool_calls 入参）；每条消息内容统一截断保护体积
+        transcript: result.transcript.map((message) => ({ ...message, content: truncateContent(message.content) })),
+      }, Date.now() - startedAt);
       post({ kind: 'done', requestId, taskKind: 'agent', text: result.text, transcript: result.transcript });
     } catch (error) {
+      const code = toErrorCode(error, runtime.controller);
+      const message = error instanceof Error ? error.message : String(error);
+      recordCallLog(requestId, 'agent_error', { code, message });
       post({
         kind: 'error',
         requestId,
-        code: toErrorCode(error, runtime.controller),
-        message: error instanceof Error ? error.message : String(error),
+        code,
+        message,
       });
     } finally {
       // 清理本任务挂起回执（晚到 tool-result 按 toolCallId 出表被忽略）
@@ -300,6 +370,7 @@ export function createWorkerHandle(deps: WorkerHandleDeps): {
     };
     agentRuntimes.set(requestId, runtime);
     post({ kind: 'agent-accepted', requestId });
+    recordCallLog(requestId, 'agent_accepted', {});
     void runAgentTask(message, runtime, [
       ...difyTools.map((tool) => tool.tool),
       ...[...runtime.tempTools.values()],
