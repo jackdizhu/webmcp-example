@@ -13,7 +13,8 @@
     "clean": "rm -rf dist"
   },
   "dependencies": {
-    "@mcp-b/webmcp-polyfill": "catalog:"
+    "@mcp-b/webmcp-polyfill": "catalog:",
+    "web-agent-worker": "workspace:*"
   },
   "devDependencies": {
     "@mcp-b/webmcp-types": "catalog:",

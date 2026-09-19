@@ -4,6 +4,7 @@ import { createGetStatusTool } from './tools/get-status';
 import { createAgentInitializationTool } from './tools/agent-init';
 import { createAgentDisconnectTool } from './tools/agent-disconnect';
 import { buildOrderFormDemo } from './demo/order-form';
+import { buildWebAgentDemo } from './demo/web-agent';
 import { buildAgentTaskTestPanel } from './agent-task-test';
 
 // 初始化 WebMCP polyfill（若无原生支持则打补丁，已有原生支持则为 no-op）。
@@ -34,6 +35,7 @@ app.innerHTML = `
     </p>
   </section>
   <section id="agent-task-panel-root" class="card" style="margin-top: 16px;"></section>
+  <section id="web-agent-root" class="card" style="margin-top: 16px;"></section>
 `;
 
 // ---- 工具定义构建（一次构建，注销后反复注册复用）----
@@ -47,6 +49,9 @@ const formTools = buildOrderFormDemo(demoRoot);
 
 // 页签反调联调测试面板（R5）：验证 window.webmcpAgent C5 通道
 buildAgentTaskTestPanel(document.querySelector<HTMLElement>('#agent-task-panel-root')!);
+
+// Web Agent Worker 后台调用 Demo（Web Worker 线程调 Dify / loop-agent，页面 UI 演示）
+buildWebAgentDemo(document.querySelector<HTMLElement>('#web-agent-root')!);
 
 // ---- 注册/注销编排 ----
 // 注销机制 = registerTool(tool, { signal }) 传入的 AbortSignal：abort 后 polyfill

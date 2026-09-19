@@ -98,6 +98,35 @@
       .at-meta { margin: 0 0 6px; font-size: 12px; color: var(--muted); word-break: break-all; }
       .at-meta code { background: #eef2f7; padding: 0 4px; border-radius: 4px; }
       .at-result-body { margin: 0; font-size: 12px; white-space: pre-wrap; overflow-wrap: anywhere; max-height: 240px; overflow: auto; }
+      /* Web Agent Worker 后台调用 Demo（demo/web-agent.ts，wa- 前缀） */
+      .wa-hint { color: var(--muted); font-size: 13px; margin: 0 0 12px; }
+      .wa-hint code { background: #eef2f7; padding: 0 4px; border-radius: 4px; }
+      .wa-config { display: grid; grid-template-columns: repeat(2, 1fr); gap: 10px 16px; margin-bottom: 12px; }
+      .wa-field { display: flex; flex-direction: column; gap: 4px; font-size: 13px; color: var(--muted); }
+      .wa-field input, .wa-field select, .wa-chat-row input, .wa-chat-row select {
+        font-size: 14px; padding: 8px 10px; border: 1px solid var(--border); border-radius: 8px; color: var(--text);
+      }
+      .wa-actions { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 14px; }
+      .wa-actions button { background: var(--accent); color: #fff; border: none; border-radius: 8px; padding: 9px 16px; font-size: 14px; cursor: pointer; }
+      .wa-actions button:hover:not(:disabled) { filter: brightness(0.95); }
+      .wa-actions button:disabled { opacity: 0.5; cursor: not-allowed; }
+      .wa-actions #wa-stop-btn { background: #dc2626; }
+      .wa-status { color: var(--muted); font-size: 13px; }
+      .wa-section { border-top: 1px solid var(--border); padding-top: 12px; margin-top: 12px; }
+      .wa-section h3 { font-size: 15px; margin: 0 0 8px; }
+      .wa-chat-row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin-bottom: 8px; }
+      .wa-chat-row input:first-child { flex: 1; min-width: 220px; }
+      .wa-chat-row button { background: var(--accent); color: #fff; border: none; border-radius: 8px; padding: 9px 16px; font-size: 14px; cursor: pointer; }
+      .wa-chat-row button:hover { filter: brightness(0.95); }
+      .wa-radio { font-size: 13px; color: var(--muted); display: inline-flex; align-items: center; gap: 4px; }
+      .wa-tool-id { width: 120px; }
+      .wa-output { background: #f8fafc; border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px; font-size: 13px; min-height: 60px; max-height: 260px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; margin: 0 0 6px; }
+      .wa-meta { color: var(--muted); font-size: 12px; margin: 0 0 6px; word-break: break-all; }
+      .wa-tasks { display: flex; flex-direction: column; gap: 10px; }
+      .wa-task-card { border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px; background: #f8fafc; }
+      .wa-task-head { margin: 0 0 6px; font-size: 13px; font-weight: 600; }
+      .wa-task-log { background: #eef2f7; border-radius: 6px; padding: 8px 10px; font-size: 12px; max-height: 140px; overflow: auto; white-space: pre-wrap; margin: 0 0 6px; }
+      .wa-task-body { margin: 0; font-size: 13px; white-space: pre-wrap; overflow-wrap: anywhere; }
       /* 工具注册管理面板（main.ts：移除注册 / 重新注册按钮） */
       .tr-title { font-size: 16px; margin: 0 0 8px; }
       .tr-status { font-size: 14px; margin: 0 0 12px; }

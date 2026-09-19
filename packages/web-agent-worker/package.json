@@ -1,0 +1,45 @@
+{
+  "name": "web-agent-worker",
+  "version": "0.1.0",
+  "description": "浏览器页面后台线程（Web Worker）调用远程 Agent 接口的公共库：Dify chat 直调（SSE 增量 / JSON 聚合）+ loop-agent 工具循环（LLM 大脑，Dify-as-Tool + 页面临时回调工具）。零 DOM、零 chrome.*、零 workspace 包依赖，配置与 fetch 全部依赖注入。",
+  "keywords": [
+    "web-worker",
+    "dify",
+    "agent-loop",
+    "llm",
+    "sse"
+  ],
+  "license": "MIT",
+  "author": "jackdizhu",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/jackdizhu/webmcp-example.git",
+    "directory": "packages/web-agent-worker"
+  },
+  "type": "module",
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
+  "exports": {
+    ".": "./src/index.ts",
+    "./worker": "./src/worker/index.ts"
+  },
+  "files": [
+    "src",
+    "dist"
+  ],
+  "scripts": {
+    "test": "vitest run",
+    "typecheck": "tsc -p tsconfig.check.json --noEmit",
+    "lint": "eslint .",
+    "clean": "node -e \"require('fs').rmSync('dist',{recursive:true,force:true})\""
+  },
+  "devDependencies": {
+    "@types/node": "catalog:",
+    "eslint": "catalog:",
+    "typescript": "catalog:",
+    "vitest": "catalog:"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}
