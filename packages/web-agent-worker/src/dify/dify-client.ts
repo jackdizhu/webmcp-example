@@ -168,13 +168,14 @@ function extractSseDataPayloads(buffer: string): { payloads: string[]; rest: str
   const rest = blocks.pop() ?? '';
   const payloads: string[] = [];
   for (const block of blocks) {
+    // SSE 规范：同一事件块内的多行 data: 行以 \n 连接为单个 data 字段
+    let payload = '';
     for (const line of block.split('\n')) {
       // 仅取 data: 行；event:/id:/retry: 行与注释行忽略（事件类型在 data JSON 内）
-      if (line.startsWith('data:')) {
-        const payload = line.slice(5).trim();
-        if (payload.length > 0 && payload !== '[DONE]') payloads.push(payload);
-      }
+      if (line.startsWith('data:')) payload += line.slice(5).trim() + '\n';
     }
+    payload = payload.trim();
+    if (payload.length > 0 && payload !== '[DONE]') payloads.push(payload);
   }
   return { payloads, rest };
 }

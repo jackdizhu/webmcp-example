@@ -104,6 +104,20 @@ describe('createDifyClient · streaming（text/event-stream）', () => {
     expect(result.answer).toBe('分帧');
   });
 
+  it('同一事件块内多行 data: 行按 SSE 规范合并为单个事件', async () => {
+    const client = createDifyClient({
+      fetchImpl: (async () =>
+        streamResponse([
+          // data 跨两行（JSON 在逗号后断行，合并后仍为合法 JSON）
+          'data: {"event": "message",\ndata: "answer": "多行", "conversation_id": "c-m"}\n\n',
+          sse({ event: 'message_end' }),
+        ])) as unknown as typeof fetch,
+    });
+    const result = await client.chat(baseInput);
+    expect(result.answer).toBe('多行');
+    expect(result.conversationId).toBe('c-m');
+  });
+
   it('message_replace 整体替换已累积内容（内容审查）', async () => {
     const client = createDifyClient({
       fetchImpl: (async () =>
